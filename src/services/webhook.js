@@ -1,0 +1,86 @@
+/**
+ * webhook.js
+ *
+ * Client-side webhook dispatcher for Tradazone checkout events.
+ *
+ * Supported events:
+ *   - user.signed_up      fired when a wallet is connected for the first time
+ *   - checkout.created    fired when a new checkout link is created
+ *   - checkout.paid       fired when a checkout is marked as paid
+ *   - checkout.viewed     fired when a checkout page is opened
+ *
+ * Webhook endpoints are stored per-user in localStorage under WEBHOOK_KEY.
+ * Each dispatch sends a POST request with a JSON body:
+ *   { event, payload, timestamp, id }
+ *
+ * A single retry is attempted after RETRY_DELAY_MS on network failure.
+ */
+
+export const WEBHOOK_KEY = 'tradazone_webhook_url';
+const RETRY_DELAY_MS = 1000;
+
+/** Persist the webhook endpoint URL. Pass null/empty to clear. */
+export function setWebhookUrl(url) {
+    if (!url) {
+        localStorage.removeItem(WEBHOOK_KEY);
+        return;
+    }
+    if (!isValidWebhookUrl(url)) {
+        throw new Error('Invalid webhook URL: must be a valid http/https URL');
+    }
+    localStorage.setItem(WEBHOOK_KEY, url);
+}
+
+/** Retrieve the currently configured webhook endpoint URL, or null. */
+export function getWebhookUrl() {
+    return localStorage.getItem(WEBHOOK_KEY) || null;
+}
+
+/** Returns true if the string is a valid http/https URL. */
+export function isValidWebhookUrl(url) {
+    try {
+        const parsed = new URL(url);
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Dispatch a webhook event to the configured endpoint.
+ *
+ * @param {string} event   - Event name, e.g. 'checkout.created'
+ * @param {object} payload - Event-specific data
+ * @returns {Promise<{ ok: boolean, status?: number, error?: string }>}
+ */
+export async function dispatchWebhook(event, payload) {
+    const url = getWebhookUrl();
+    if (!url) return { ok: false, error: 'no_url_configured' };
+
+    const body = JSON.stringify({
+        id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        event,
+        payload,
+        timestamp: new Date().toISOString(),
+    });
+
+    const options = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+    };
+
+    try {
+        const res = await fetch(url, options);
+        return { ok: res.ok, status: res.status };
+    } catch {
+        // Single retry after delay
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+        try {
+            const res = await fetch(url, options);
+            return { ok: res.ok, status: res.status };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    }
+}

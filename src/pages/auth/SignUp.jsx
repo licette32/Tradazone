@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { dispatchWebhook } from '../../services/webhook';
 import illustration from '../../assets/auth-splash.svg';
 import Logo from '../../components/ui/Logo';
 import ConnectWalletModal from '../../components/ui/ConnectWalletModal';
@@ -20,9 +21,14 @@ function SignUp() {
         }
     }, [user.isAuthenticated, navigate, redirectTo]);
 
-    const handleConnectSuccess = () => {
+    const handleConnectSuccess = (walletAddress, walletType) => {
         // Mark as first-time user so Onboarding/Welcome logic can trigger if needed
         localStorage.setItem('tradazone_onboarded', 'false');
+        // Fire user.signed_up webhook (non-blocking)
+        dispatchWebhook('user.signed_up', {
+            walletAddress: walletAddress || user.walletAddress,
+            walletType: walletType || user.walletType,
+        });
         navigate(redirectTo, { replace: true });
     };
 
