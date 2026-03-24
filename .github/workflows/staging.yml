@@ -1,9 +1,9 @@
-name: Deploy to GitHub Pages
+name: Deploy to Staging
 
 on:
   push:
     branches:
-      - main
+      - staging
 
 permissions:
   contents: read
@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
+  group: "pages-staging"
   cancel-in-progress: true
 
 jobs:
@@ -33,10 +33,10 @@ jobs:
       - name: Run unit tests
         run: npm test
 
-  deploy:
+  deploy-staging:
     needs: test
     environment:
-      name: github-pages
+      name: staging
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
@@ -52,9 +52,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build (production mode)
-        # Vite loads .env.production — VITE_BASE_PATH and VITE_APP_ENV come from there
-        run: npm run build -- --mode production
+      - name: Build (staging mode)
+        # Vite loads .env.staging when --mode staging is passed.
+        # VITE_BASE_PATH and VITE_APP_ENV are read from that file.
+        run: npm run build -- --mode staging
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -64,6 +65,6 @@ jobs:
         with:
           path: './dist'
 
-      - name: Deploy to GitHub Pages
+      - name: Deploy to GitHub Pages (staging)
         id: deployment
         uses: actions/deploy-pages@v4
