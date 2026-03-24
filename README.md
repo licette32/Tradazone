@@ -235,6 +235,18 @@ Manual test checklist after edits:
 
 ---
 
+## 🔄 Dependency Management
+
+This project uses [Dependabot](https://docs.github.com/en/code-security/dependabot) to automate dependency updates. Configuration lives in [`.github/dependabot.yml`](./.github/dependabot.yml).
+
+- npm packages and GitHub Actions are checked **weekly (Monday)**
+- PRs are grouped by ecosystem (React, Vite, testing tools) to reduce noise
+- A maximum of 5 open PRs per ecosystem prevents queue buildup
+
+To review or adjust the schedule/grouping, edit `.github/dependabot.yml`.
+
+---
+
 ## 🤝 Contributing
 
 Contributions, bug reports, and feature suggestions are all welcome!
