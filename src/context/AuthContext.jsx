@@ -22,8 +22,9 @@
  * @module AuthContext
  */
 
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useState, useEffect, useMemo } from "react";
 import { STORAGE_PREFIX, SESSION_TTL_MS, ALLOW_MOCK_WALLET } from '../config/env';
+import { useDiscoveredProviders } from '../utils/wallet-discovery';
 
 const AuthContext = createContext(null);
 
@@ -254,6 +255,82 @@ export function AuthProvider({ children }) {
 
     /** @type {[WalletType | null, React.Dispatch<React.SetStateAction<WalletType | null>>]} */
     const [walletType, setWalletType] = useState(user.walletType || null);
+
+    // ── Wallet Detection ─────────────────────────────────────────────────────
+
+    const discoveredProviders = useDiscoveredProviders();
+
+    /** @type {[InstalledWallets, React.Dispatch<React.SetStateAction<InstalledWallets>>]} */
+    const [installed, setInstalled] = useState({
+        lobstr: false,
+        argent: false,
+        metamask: false,
+        phantom: false,
+        base: false,
+        discovered: [],
+    });
+
+    useEffect(() => {
+        const checkInstallations = () => {
+            const eth = window.ethereum;
+
+            const hasLobstr = typeof window !== 'undefined' && !!window.lobstr;
+            const hasArgent = typeof window !== 'undefined' && !!(window.starknet_argentX || window.starknet?.argentX);
+
+            const hasMetaMask = discoveredProviders.some(p => p.info.rdns === 'io.metamask') || !!(eth && eth.isMetaMask);
+            const hasPhantom  = discoveredProviders.some(p => p.info.rdns === 'app.phantom')  || !!(window.phantom?.ethereum || (eth && eth.isPhantom));
+            const hasBase     = discoveredProviders.some(p => p.info.rdns === 'com.coinbase.wallet') || !!window.coinbaseWalletExtension || !!(eth && eth.isCoinbaseWallet);
+
+            setInstalled({
+                lobstr: hasLobstr,
+                argent: hasArgent,
+                metamask: hasMetaMask,
+                phantom: hasPhantom,
+                base: hasBase,
+                discovered: discoveredProviders,
+            });
+        };
+
+        checkInstallations();
+        const timer  = setTimeout(checkInstallations, 1000);
+        const timer2 = setTimeout(checkInstallations, 2500);
+        return () => {
+            clearTimeout(timer);
+            clearTimeout(timer2);
+        };
+    }, [discoveredProviders]);
+
+    /**
+     * Centralized provider configuration.
+     * Calculated as a memoized value to prevent unnecessary re-renders.
+     */
+    const availableWallets = useMemo(() => {
+        const staticWallets = [
+            { id: 'stellar', name: 'LOBSTR', network: 'stellar', networkName: 'Stellar Network', isRecommended: true, isInstalled: installed.lobstr },
+            { id: 'starknet', name: 'Argent', network: 'starknet', networkName: 'Starknet Network', isInstalled: installed.argent },
+            { id: 'metamask', name: 'MetaMask', network: 'evm', networkName: 'EVM Network', isInstalled: installed.metamask, rdns: 'io.metamask' },
+            { id: 'phantom', name: 'Phantom', network: 'evm', networkName: 'Solana / EVM', isInstalled: installed.phantom, rdns: 'app.phantom' },
+            { id: 'base', name: 'Base Account', network: 'evm', networkName: 'Smart Wallet / EVM', isInstalled: installed.base, rdns: 'com.coinbase.wallet' },
+            { id: 'starknet_generic', name: 'Other Starknet Wallets', network: 'starknet', networkName: 'Braavos, etc.', isInstalled: false, isSecondary: true },
+            { id: 'evm_generic', name: 'EVM / Browser Wallets', network: 'evm', networkName: 'Any injected Web3 provider', isInstalled: false, isSecondary: true }
+        ];
+
+        // Add discovered EIP-6963 providers
+        const knownRdns = ['io.metamask', 'app.phantom', 'com.coinbase.wallet'];
+        const discoveredWallets = discoveredProviders
+            .filter(p => !knownRdns.includes(p.info.rdns))
+            .map(p => ({
+                id: `discovered_${p.info.uuid}`,
+                name: p.info.name,
+                network: 'evm',
+                networkName: 'EVM Network',
+                isInstalled: true,
+                iconUri: p.info.icon,
+                provider: p.provider
+            }));
+
+        return [...staticWallets, ...discoveredWallets];
+    }, [installed, discoveredProviders]);
 
     // ── completeWalletLogin ──────────────────────────────────────────────────
 
@@ -720,6 +797,8 @@ export function AuthProvider({ children }) {
             completeWalletLogin,
             lastWallet,
             isConnecting,
+            installed,
+            availableWallets,
         }}>
             {children}
         </AuthContext.Provider>
