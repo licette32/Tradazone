@@ -1,3 +1,39 @@
+<!-- START doctoc generated TOC please keep comment here to allow auto update -->
+<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
+
+- [Tradazone](#tradazone)
+  - [📖 About the Project](#-about-the-project)
+    - [Key Features](#key-features)
+  - [🚀 Getting Started](#-getting-started)
+    - [Prerequisites](#prerequisites)
+    - [Installation](#installation)
+    - [Building for Production](#building-for-production)
+    - [Deploying](#deploying)
+    - [Modifying the README](#modifying-the-readme)
+  - [🛠️ Developer Guide: Auth & SignUp](#-developer-guide-auth--signup)
+  - [🛠️ Developer Guide: Auth & SignUp](#-developer-guide-auth--signup-1)
+    - [Authentication Flow Overview](#authentication-flow-overview)
+    - [Modifying the SignUp Page](#modifying-the-signup-page)
+    - [Adding New Wallet Providers](#adding-new-wallet-providers)
+    - [Onboarding & Welcome Logic](#onboarding--welcome-logic)
+    - [Deep Linking & Redirects](#deep-linking--redirects)
+  - [🗂️ Project Structure](#-project-structure)
+  - [🛠️ Tech Stack](#-tech-stack)
+  - [📐 Architectural Decision Records (ADR)](#-architectural-decision-records-adr)
+    - [ADR 001: Selection of Tech Stack & Multi-chain Strategy](#adr-001-selection-of-tech-stack--multi-chain-strategy)
+    - [ADR-003: InvoiceDetail Component — Stack & Design Decisions](#adr-003-invoicedetail-component--stack--design-decisions)
+    - [ADR-002: API Gateway Stack Selection (Implementation Reference)](#adr-002-api-gateway-stack-selection-implementation-reference)
+  - [🔧 Developer Setup Notes](#-developer-setup-notes)
+    - [Modifying `ProfileSettings`](#modifying-profilesettings)
+  - [🔐 Dependency Security](#-dependency-security)
+  - [🔄 Dependency Management](#-dependency-management)
+  - [🤝 Contributing](#-contributing)
+  - [📄 License](#-license)
+  - [🔗 Links](#-links)
+
+<!-- END doctoc generated TOC please keep comment here to allow auto update -->
+
 # Tradazone
 
 > A modern, multi-chain invoicing and checkout platform built for businesses and freelancers — enabling seamless payments across fiat and blockchain networks.
@@ -68,10 +104,32 @@ The app will be available at `http://localhost:5173`.
 npm run build
 ```
 
+### Deploying
+
+```bash
 npm run deploy
 ```
 
+### Modifying the README
+
+This project uses [doctoc](https://github.com/thlorenz/doctoc) to generate a table of contents from Markdown headings. When adding new sections to the README, follow these guidelines:
+
+1. **Add a descriptive heading**: Use `##` for main sections and `###` for subsections.
+2. **Run doctoc after changes**: To update the table of contents, run:
+   ```bash
+   npm run lint:readme
+   ```
+3. **CI validates README structure**: The CI pipeline includes a README linting job that checks for proper formatting. This job runs on:
+   - Every push to `main` and `staging` branches
+   - Every pull request that modifies `README.md`
+4. **Manual TOC generation**: If you need to generate the TOC locally without committing, run:
+   ```bash
+   npx doctoc README.md
+   ```
+
 ---
+
+## 🛠️ Developer Guide: Auth & SignUp
 
 ## 🛠️ Developer Guide: Auth & SignUp
 
