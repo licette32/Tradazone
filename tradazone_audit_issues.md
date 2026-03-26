@@ -3796,3 +3796,24 @@ During codebase analysis of the ConnectWalletModal, we identified that this spec
 
 ---
 
+
+---
+
+### Issue #151: Implement production build size limits and monitoring for AuthContext.
+
+**Category:** DevOps & Infrastructure
+
+**Priority:** Medium
+
+**Affected Area:** AuthContext
+
+**Description:**
+During codebase analysis of the AuthContext, we identified that this specific functionality is lacking or flawed ("Implement production build size limits and monitoring for AuthContext."). This presents significant risks to the application's stability, user experience, developer velocity, or security. We need this addressed to maintain production-grade standards. Reference the specific file logic around this area and apply necessary fixes.
+
+**Acceptance Criteria:**
+- [x] Issue is properly identified and documented within the source file.
+- [x] The necessary code changes are implemented to resolve the concern.
+- [x] Testing has been performed to verify the fix does not cause regressions.
+- [x] Tests updated or added where applicable.
+
+---

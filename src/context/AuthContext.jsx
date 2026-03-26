@@ -1,6 +1,13 @@
 /**
  * @fileoverview AuthContext — application-wide authentication and wallet state.
  *
+ * ISSUE: #151 (Build size limits for AuthContext)
+ * Category: DevOps & Infrastructure
+ * Affected Area: AuthContext
+ * Description: Implement production build size limits and monitoring for AuthContext.
+ * This context is large due to multi-wallet support; size limits and monitoring
+ * are enforced in vite.config.js and CI to prevent bundle bloat.
+ *
  * Manages user identity, wallet connection, and session persistence for
  * Tradazone. Exposes a `connectWallet` function that is the primary entry
  * point used by {@link ConnectWalletModal}.
