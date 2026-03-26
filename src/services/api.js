@@ -9,15 +9,46 @@
 // Consequence: feature pages can ship against consistent async interfaces now and
 // migrate method-by-method to real HTTP calls without rewriting page-level logic.
 
-import { mockCustomers, mockInvoices, mockCheckouts, mockItems } from '../data/mockData';
+import {
+  mockCustomers,
+  mockInvoices,
+  mockCheckouts,
+  mockItems,
+} from "../data/mockData";
 
 // Base URL for the backend API
 // In development, this can be an environment variable or proxy
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL || "http://localhost:3000/api";
 
 // Helper to simulate API delay
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Slice an array into a single page of results.
+ *
+ * @param {Array}  items
+ * @param {number} page   - 1-based page number. Values < 1 are clamped to 1.
+ * @param {number} limit  - Items per page (default 10).
+ * @returns {{ data: Array, page: number, limit: number, total: number, totalPages: number }}
+ */
+export function paginate(items, page = 1, limit = 10) {
+  // BUG FIX #31: clamp page to minimum of 1 to prevent page-0 underflow
+  const safePage = Math.max(1, Math.floor(page));
+  const safeLimit = Math.max(1, Math.floor(limit));
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+  //if the requested page exceeds the available pages,clamp to last page
+  const clampedPage = Math.min(safePage, totalPages);
+  const start = (clampedPage - 1) * safeLimit;
+  return {
+    data: items.slice(start, start + safeLimit),
+    page: clampedPage,
+    limit: safeLimit,
+    total,
+    totalPages,
+  };
+}
 // ---------------------------------------------------------------------------
 // 401 / token-expiration interceptor
 // ---------------------------------------------------------------------------
@@ -39,8 +70,8 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
  * ```
  */
 let _onUnauthorized = () => {
-    const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
-    window.location.assign(`${base}/signin?reason=expired`);
+  const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+  window.location.assign(`${base}/signin?reason=expired`);
 };
 
 /**
@@ -51,7 +82,7 @@ let _onUnauthorized = () => {
  * @param {() => void} handler
  */
 export function setUnauthorizedHandler(handler) {
-    _onUnauthorized = handler;
+  _onUnauthorized = handler;
 }
 
 /**
@@ -73,98 +104,98 @@ export function setUnauthorizedHandler(handler) {
  * @returns {Promise<unknown>}
  */
 async function apiFetch(url, options = {}) {
-    const response = await fetch(url, options);
+  const response = await fetch(url, options);
 
-    if (response.status === 401) {
-        _onUnauthorized();
-        return { ok: false, error: 'ERR_TOKEN_EXPIRED', status: 401 };
-    }
+  if (response.status === 401) {
+    _onUnauthorized();
+    return { ok: false, error: "ERR_TOKEN_EXPIRED", status: 401 };
+  }
 
-    if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw Object.assign(
-            new Error(body.message || `API error ${response.status}`),
-            { status: response.status, body }
-        );
-    }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw Object.assign(
+      new Error(body.message || `API error ${response.status}`),
+      { status: response.status, body }
+    );
+  }
 
-    return response.json();
+  return response.json();
 }
 
 // Expose for tests and future real-fetch migrations (not needed by mock callers)
 export { apiFetch };
 
 const api = {
-    // Customers
-    customers: {
-        list: async () => {
-            // TODO: Replace with fetch(`${API_BASE_URL}/customers`)
-            await delay(500);
-            return mockCustomers;
-        },
-        get: async (id) => {
-            await delay(300);
-            return mockCustomers.find(c => c.id === id);
-        },
-        create: async (data) => {
-            await delay(800);
-            console.log('API Create Customer:', data);
-            return { id: Date.now().toString(), ...data };
-        },
-        update: async (id, data) => {
-            await delay(500);
-            console.log('API Update Customer:', id, data);
-            return { id, ...data };
-        },
-        delete: async (id) => {
-            await delay(500);
-            console.log('API Delete Customer:', id);
-            return true;
-        }
+  // Customers
+  customers: {
+    // BUG FIX #31: list now accepts { page, limit } and returns paginated envelope
+    list: async ({ page = 1, limit = 10 } = {}) => {
+      await delay(500);
+      return paginate(mockCustomers, page, limit);
     },
-
-    // Invoices
-    invoices: {
-        list: async () => {
-            await delay(500);
-            return mockInvoices;
-        },
-        get: async (id) => {
-            await delay(300);
-            return mockInvoices.find(i => i.id === id);
-        },
-        create: async (data) => {
-            await delay(800);
-            console.log('API Create Invoice:', data);
-            return { id: `INV-${Date.now()}`, ...data };
-        }
+    get: async (id) => {
+      await delay(300);
+      return mockCustomers.find((c) => c.id === id);
     },
-
-    // Checkouts
-    checkouts: {
-        list: async () => {
-            await delay(500);
-            return mockCheckouts;
-        },
-        create: async (data) => {
-            await delay(800);
-            console.log('API Create Checkout:', data);
-            return { id: `CHK-${Date.now()}`, ...data };
-        }
+    create: async (data) => {
+      await delay(800);
+      console.log("API Create Customer:", data);
+      return { id: Date.now().toString(), ...data };
     },
+    update: async (id, data) => {
+      await delay(500);
+      console.log("API Update Customer:", id, data);
+      return { id, ...data };
+    },
+    delete: async (id) => {
+      await delay(500);
+      console.log("API Delete Customer:", id);
+      return true;
+    },
+  },
 
-    // Items
-    items: {
-        list: async () => {
-            await delay(500);
-            return mockItems;
-        },
-        create: async (data) => {
-            await delay(800);
-            console.log('API Create Item:', data);
-            return { id: Date.now().toString(), ...data };
-        }
-    }
+  // Invoices
+  invoices: {
+    list: async ({ page = 1, limit = 10 } = {}) => {
+      await delay(500);
+      return paginate(mockInvoices, page, limit);
+    },
+    get: async (id) => {
+      await delay(300);
+      return mockInvoices.find((i) => i.id === id);
+    },
+    create: async (data) => {
+      await delay(800);
+      console.log("API Create Invoice:", data);
+      return { id: `INV-${Date.now()}`, ...data };
+    },
+  },
+
+  // Checkouts
+  checkouts: {
+    list: async ({ page = 1, limit = 10 } = {}) => {
+      await delay(500);
+      return paginate(mockCheckouts, page, limit);
+    },
+    create: async (data) => {
+      await delay(800);
+      console.log("API Create Checkout:", data);
+      return { id: `CHK-${Date.now()}`, ...data };
+    },
+  },
+
+  // Items
+  items: {
+    list: async ({ page = 1, limit = 10 } = {}) => {
+      await delay(500);
+      return paginate(mockItems, page, limit);
+    },
+    create: async (data) => {
+      await delay(800);
+      console.log("API Create Item:", data);
+      return { id: Date.now().toString(), ...data };
+    },
+  },
 };
 
 export default api;
