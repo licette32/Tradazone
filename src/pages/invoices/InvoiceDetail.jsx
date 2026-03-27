@@ -3,47 +3,78 @@
  * Category: Performance & Scalability
  * * This fix introduces a debounced search filter for invoice line items to
  * optimize rendering performance and improve UX for large invoices.
+ *
+ * Issue: Missing "Export to CSV" action on InvoiceDetail.
+ * Category: Functionality Gap / Data Portability
+ * Risk: Users cannot export line-item data for accounting workflows.
+ * Resolution: Added a dedicated CSV export button with proper CSV escaping,
+ * invoice metadata rows, and line-item totals.
  */
-import { useRef, useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { ArrowLeft, Send, Download, Edit, Eye, Search } from "lucide-react";
+import { ArrowLeft, Send, Download, Edit, Eye, Search, FileSpreadsheet } from "lucide-react";
 import Button from "../../components/forms/Button";
 import StatusBadge from "../../components/tables/StatusBadge";
 import InvoiceLayout from "../../components/invoice/InvoiceLayout";
 import { useData } from "../../context/DataContext";
-import { useAuth } from "../../context/AuthContext";
-import { useDebounce } from "../../hooks/useDebounce"; // New hook
+import { loadSession, useAuth } from "../../context/AuthContext";
+import { useDebounce } from "../../hooks/useDebounce";
 import { formatUtcDate } from "../../utils/date";
 
+function escapeCsvField(value) {
+  const normalized = value == null ? "" : String(value);
+  if (/[",\n]/.test(normalized)) {
+    return `"${normalized.replace(/"/g, '""')}"`;
+  }
+  return normalized;
+}
+
+function buildInvoiceCsv(invoice) {
+  const rows = [
+    ["Invoice ID", invoice.id],
+    ["Customer", invoice.customer],
+    ["Due Date", formatUtcDate(invoice.dueDate)],
+    ["Created", formatUtcDate(invoice.createdAt)],
+    [],
+    ["Item", "Quantity", "Price (STRK)", "Total (STRK)"],
+  ];
+
+  invoice.items.forEach((item) => {
+    const quantity = Number(item.quantity) || 0;
+    const price = parseFloat(item.price) || 0;
+    rows.push([item.name, quantity, price, quantity * price]);
+  });
+
+  const grandTotal = invoice.items.reduce((total, item) => {
+    return total + (parseFloat(item.price) || 0) * (Number(item.quantity) || 0);
+  }, 0);
+
+  rows.push([]);
+  rows.push(["Grand Total", "", "", grandTotal]);
+
+  return rows.map((row) => row.map(escapeCsvField).join(",")).join("\n");
+}
+
 function InvoiceDetail() {
-    const { id } = useParams();
-    const navigate = useNavigate();
-    const invoiceRef = useRef(null);
-    const { user } = useAuth();
-    const { invoices, customers } = useData();
-    const invoice = invoices.find(inv => inv.id === id);
-    const customer = customers.find(c => c.id === invoice?.customerId);
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const invoiceRef = useRef(null);
+  const { user } = useAuth();
+  const { invoices, customers } = useData();
 
-    // #21: bail out early if the session expired while the page was open
-    useEffect(() => {
-        if (!loadSession()) {
-            navigate('/signin?reason=expired', { replace: true });
-        }
-    }, [navigate]);
+  const invoice = invoices.find((inv) => inv.id === id);
+  const customer = customers.find((c) => c.id === invoice?.customerId);
 
-    if (!invoice) return <div className="p-8"><p className="text-t-muted">Invoice not found</p></div>;
-
-    const sender = {
-        name: user?.name || 'Tradazone',
-        email: user?.email || 'hello@tradazone.com',
-    };
+  // #21: bail out early if the session expired while the page was open
+  useEffect(() => {
+    if (!loadSession()) {
+      navigate("/signin?reason=expired", { replace: true });
+    }
+  }, [navigate]);
 
   // Search state
   const [searchTerm, setSearchTerm] = useState("");
   const debouncedSearch = useDebounce(searchTerm, 300);
-
-  const invoice = invoices.find((inv) => inv.id === id);
-  const customer = customers.find((c) => c.id === invoice?.customerId);
 
   /**
    * Filtered items list - Memoized to prevent recalculation on every render
@@ -93,6 +124,21 @@ function InvoiceDetail() {
     html2pdf().set(options).from(element).save();
   };
 
+  const handleExportCsv = () => {
+    if (!invoice) return;
+
+    const csvContent = buildInvoiceCsv(invoice);
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = `${invoice.id}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(downloadUrl);
+  };
+
   return (
     <div>
       <div className="flex items-start justify-between mb-6">
@@ -120,6 +166,9 @@ function InvoiceDetail() {
           </Button>
           <Button variant="secondary" icon={Download} onClick={handleDownload}>
             Download
+          </Button>
+          <Button variant="secondary" icon={FileSpreadsheet} onClick={handleExportCsv}>
+            Export to CSV
           </Button>
           <Button variant="secondary" icon={Send}>
             Send
