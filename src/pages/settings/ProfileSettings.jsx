@@ -13,6 +13,7 @@ function ProfileSettings() {
     // Subscribing to the entire auth context caused unrelated wallet/runtime
     // updates to redraw the whole settings form while the user was editing it.
     const user = useAuthUser();
+    
     // #34: wallet-auth users always have a generated name but never an email;
     // email is the only field that signals a real profile has been set up.
     const hasProfile = !!(user.email);

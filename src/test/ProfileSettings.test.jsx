@@ -5,8 +5,8 @@ import { AuthProvider } from '../context/AuthContext';
 import ProfileSettings from '../pages/settings/ProfileSettings';
 import { STORAGE_PREFIX } from '../config/env';
 
-// #34: empty state should appear when the user has no profile data yet.
 
+// #34: empty state should appear when the user has no profile data yet.
 const SESSION_KEY = `${STORAGE_PREFIX}_auth`;
 
 function seedSession(user) {
