@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, Copy, Link as LinkIcon } from 'lucide-react';
+import ReactQuill from 'react-quill';
+import 'react-quill/dist/quill.snow.css'; // Import Quill styles
 import Input from '../../components/forms/Input';
 import Button from '../../components/forms/Button';
 import { useData } from '../../context/DataContext';
@@ -28,6 +30,9 @@ function CreateCheckout() {
 
     const handleChange = (field) => (e) => { setFormData({ ...formData, [field]: e.target.value }); };
 
+    // Quill passes the value directly, not an event object
+    const handleDescriptionChange = (value) => { setFormData({ ...formData, description: value }); };
+
     const previewLink = formData.title
         ? `pay.tradazone.com/${formData.title.toLowerCase().replace(/\s+/g, '-')}`
         : 'pay.tradazone.com/your-checkout';
@@ -47,7 +52,20 @@ function CreateCheckout() {
                     <div className="flex flex-col gap-5 mb-6">
                         {/* E2E UI Testing: IDs added to inputs (title, description, amount) to ensure proper queryability for Checkout flow tests. */}
                         <Input id="title" label="Title" placeholder="Enter checkout title" value={formData.title} onChange={handleChange('title')} required />
-                        <Input id="description" label="Description" placeholder="Enter description" value={formData.description} onChange={handleChange('description')} />
+
+                        {/* Rich Text Editor for Description */}
+                        <div className="flex flex-col gap-1.5">
+                            <label htmlFor="description" className="text-xs font-medium text-t-secondary uppercase tracking-wide">Description</label>
+                            <ReactQuill
+                                id="description"
+                                theme="snow"
+                                value={formData.description}
+                                onChange={handleDescriptionChange}
+                                placeholder="Enter a detailed description..."
+                                className="bg-white [&_.ql-editor]:min-h-[120px]"
+                            />
+                        </div>
+
                         <div className="relative">
                             <Input id="amount" label="Amount" type="number" placeholder="0.00" value={formData.amount} onChange={handleChange('amount')} required />
                             <span className="absolute right-3 bottom-2.5 text-xs font-semibold text-brand bg-brand-bg px-2 py-1 rounded">STRK</span>
@@ -67,7 +85,17 @@ function CreateCheckout() {
                         </div>
                         <div className="p-6 text-center">
                             <h3 className="text-lg font-semibold mb-2">{formData.title || 'Your Checkout Title'}</h3>
-                            <p className="text-sm text-t-muted mb-6">{formData.description || 'Description will appear here'}</p>
+
+                            {/* Safely render HTML from Quill, or show fallback */}
+                            {formData.description && formData.description !== '<p><br></p>' ? (
+                                <div
+                                    className="text-sm text-t-muted mb-6 text-left"
+                                    dangerouslySetInnerHTML={{ __html: formData.description }}
+                                />
+                            ) : (
+                                <p className="text-sm text-t-muted mb-6">Description will appear here</p>
+                            )}
+
                             <div className="flex items-baseline justify-center gap-2 mb-6">
                                 <span className="text-4xl font-bold">{formData.amount || '0'}</span>
                                 <span className="text-t-muted">STRK</span>

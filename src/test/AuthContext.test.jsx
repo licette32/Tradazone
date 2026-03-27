@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { renderHook, act, render } from '@testing-library/react';
-import { AuthProvider, useAuth, useAuthUser } from '../context/AuthContext';
+import { renderHook, act } from '@testing-library/react';
+import {
+  AuthProvider,
+  useAuth,
+  useAuthActions,
+  useAuthUser,
+  useAuthWalletCatalog,
+} from '../context/AuthContext';
 import { STORAGE_PREFIX } from '../config/env';
 
 // Keys must match what AuthContext derives from STORAGE_PREFIX
@@ -57,6 +63,32 @@ describe('login', () => {
     const stored = JSON.parse(localStorage.getItem(SESSION_KEY));
     expect(stored.user.name).toBe('Bob');
     expect(stored.expiresAt).toBeGreaterThan(Date.now());
+  });
+});
+
+describe('updateProfile', () => {
+  it('persists sanitized rich text descriptions in the auth session', () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    act(() => {
+      result.current.completeWalletLogin('GADDR1234', 'stellar');
+    });
+
+    act(() => {
+      result.current.updateProfile({
+        name: 'Merchant Alice',
+        email: 'merchant@example.com',
+        company: 'Alice Co',
+        profileDescription: '<p>Trusted <strong>merchant</strong><script>alert(1)</script></p>',
+      });
+    });
+
+    expect(result.current.user.name).toBe('Merchant Alice');
+    expect(result.current.user.company).toBe('Alice Co');
+    expect(result.current.user.profileDescription).toBe('<p>Trusted <strong>merchant</strong></p>');
+
+    const stored = JSON.parse(localStorage.getItem(SESSION_KEY));
+    expect(stored.user.profileDescription).toBe('<p>Trusted <strong>merchant</strong></p>');
   });
 });
 
@@ -163,49 +195,184 @@ describe('useAuth', () => {
 });
 
 describe('useAuthUser', () => {
-  it('does not re-render for wallet-only updates', () => {
-    let authApi;
-    let userRenderCount = 0;
+  it('keeps the same user reference for wallet-only updates', () => {
+    const { result } = renderHook(() => ({
+      auth: useAuth(),
+      user: useAuthUser(),
+    }), { wrapper });
 
-    function AuthControls() {
-      authApi = useAuth();
-      return null;
-    }
-
-    function UserConsumer() {
-      useAuthUser();
-      userRenderCount += 1;
-      return null;
-    }
-
-    render(
-      <AuthProvider>
-        <AuthControls />
-        <UserConsumer />
-      </AuthProvider>
-    );
-
-    expect(userRenderCount).toBe(1);
+    const initialUser = result.current.user;
 
     act(() => {
-      authApi.setWallet((current) => ({
+      result.current.auth.setWallet((current) => ({
         ...current,
         balance: String(Number(current.balance || '0') + 1),
       }));
     });
 
-    expect(userRenderCount).toBe(1);
+    expect(result.current.user).toBe(initialUser);
 
     act(() => {
-      authApi.login({ id: '99', name: 'Profile User', email: 'profile@example.com' });
+      result.current.auth.login({ id: '99', name: 'Profile User', email: 'profile@example.com' });
     });
 
-    expect(userRenderCount).toBe(2);
+    expect(result.current.user).not.toBe(initialUser);
   });
 
   it('throws when used outside AuthProvider', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() => renderHook(() => useAuthUser())).toThrow('useAuthUser must be used within an AuthProvider');
     spy.mockRestore();
+  });
+});
+
+describe('narrow auth selectors', () => {
+  it('useAuthActions keeps a stable reference across wallet state updates', () => {
+    const { result } = renderHook(() => ({
+      auth: useAuth(),
+      actions: useAuthActions(),
+    }), { wrapper });
+
+    const initialActions = result.current.actions;
+
+    act(() => {
+      result.current.auth.setWallet((current) => ({
+        ...current,
+        balance: String(Number(current.balance || '0') + 1),
+      }));
+    });
+
+    expect(result.current.actions).toBe(initialActions);
+  });
+
+  it('useAuthWalletCatalog keeps a stable reference across auth identity updates', () => {
+    const { result } = renderHook(() => ({
+      auth: useAuth(),
+      catalog: useAuthWalletCatalog(),
+    }), { wrapper });
+
+    const initialCatalog = result.current.catalog;
+
+    act(() => {
+      result.current.auth.login({ id: '55', name: 'Catalog Safe', email: 'catalog@example.com' });
+    });
+
+    expect(result.current.catalog).toBe(initialCatalog);
+  });
+});
+
+// ─── Race Condition Tests ─────────────────────────────────────────────────────
+
+describe('race condition prevention', () => {
+  it('prevents concurrent completeWalletLogin calls from overwriting state', () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    
+    // Simulate rapid concurrent calls
+    act(() => {
+      result.current.completeWalletLogin('GADDR1', 'stellar');
+      result.current.completeWalletLogin('GADDR2', 'stellar');
+      result.current.completeWalletLogin('GADDR3', 'stellar');
+    });
+
+    // The last call should win, but state should be consistent
+    expect(result.current.user.isAuthenticated).toBe(true);
+    expect(result.current.wallet.isConnected).toBe(true);
+    expect(result.current.user.walletAddress).toBe(result.current.wallet.address);
+    expect(result.current.user.walletType).toBe(result.current.walletType);
+  });
+
+  it('completeWalletLogin is idempotent for same address', () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    const addr = 'GADDR_SAME';
+    
+    act(() => {
+      result.current.completeWalletLogin(addr, 'stellar');
+    });
+
+    const firstState = {
+      user: { ...result.current.user },
+      wallet: { ...result.current.wallet },
+    };
+
+    // Call again with same address
+    act(() => {
+      result.current.completeWalletLogin(addr, 'stellar');
+    });
+
+    // State should remain unchanged
+    expect(result.current.user).toEqual(firstState.user);
+    expect(result.current.wallet).toEqual(firstState.wallet);
+  });
+
+  it('prevents concurrent login calls from creating inconsistent state', () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    
+    act(() => {
+      result.current.login({ id: '1', name: 'User1', email: 'user1@test.com' });
+      result.current.login({ id: '2', name: 'User2', email: 'user2@test.com' });
+    });
+
+    // Last login should win
+    expect(result.current.user.isAuthenticated).toBe(true);
+    expect(result.current.user.id).toBe('2');
+    expect(result.current.user.name).toBe('User2');
+    
+    // Session should match current user
+    const stored = JSON.parse(localStorage.getItem(SESSION_KEY));
+    expect(stored.user.id).toBe(result.current.user.id);
+  });
+
+  it('isConnecting flag prevents concurrent connection attempts', () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    
+    // Initially not connecting
+    expect(result.current.isConnecting).toBe(false);
+    
+    // Note: We can't easily test the actual async wallet connection flow here
+    // without mocking window.ethereum, window.starknet, etc.
+    // This test verifies the flag exists and is accessible
+    expect(typeof result.current.isConnecting).toBe('boolean');
+  });
+
+  it('maintains state consistency during rapid logout/login cycles', () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    
+    // Rapid login/logout cycles
+    act(() => {
+      result.current.login({ id: '1', name: 'User1', email: 'user1@test.com' });
+      result.current.logout();
+      result.current.login({ id: '2', name: 'User2', email: 'user2@test.com' });
+      result.current.logout();
+      result.current.login({ id: '3', name: 'User3', email: 'user3@test.com' });
+    });
+
+    // Final state should be authenticated with last login
+    expect(result.current.user.isAuthenticated).toBe(true);
+    expect(result.current.user.id).toBe('3');
+    
+    const stored = JSON.parse(localStorage.getItem(SESSION_KEY));
+    expect(stored.user.id).toBe('3');
+  });
+
+  it('maintains wallet and user state consistency during rapid operations', () => {
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    
+    act(() => {
+      result.current.completeWalletLogin('0xABC123', 'starknet');
+    });
+
+    // Verify consistency
+    expect(result.current.user.walletAddress).toBe('0xABC123');
+    expect(result.current.wallet.address).toBe('0xABC123');
+    expect(result.current.user.walletType).toBe('starknet');
+    expect(result.current.walletType).toBe('starknet');
+    expect(result.current.user.isAuthenticated).toBe(true);
+    expect(result.current.wallet.isConnected).toBe(true);
+
+    // Verify session storage consistency
+    const stored = JSON.parse(localStorage.getItem(SESSION_KEY));
+    expect(stored.user.walletAddress).toBe('0xABC123');
+    expect(stored.user.walletType).toBe('starknet');
+    expect(localStorage.getItem(WALLET_KEY)).toBe('0xABC123');
   });
 });

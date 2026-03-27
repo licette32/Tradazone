@@ -2,12 +2,80 @@
  * @fileoverview AuthContext — application-wide authentication and wallet state.
  * eslint-disable react-refresh/only-export-components
  *
- * ISSUE: #151 (Build size limits for AuthContext)
+ * ISSUE: #115 (Rich text descriptions in the auth/profile flow)
+ * Category: Feature Enhancement
+ * Priority: High
+ * Affected Area: AuthContext
+ * Description: The authenticated user model did not persist any description
+ * field, and Profile Settings had no way to save a rich text business
+ * description through the auth session. The fix keeps the editor UI out of
+ * AuthContext to protect the context bundle budget, while persisting a
+ * sanitized `profileDescription` string and exposing `updateProfile()` for
+ * profile forms that depend on auth state.
+ *
+ * ISSUE: #171 (Build size limits for AuthContext)
  * Category: DevOps & Infrastructure
  * Affected Area: AuthContext
  * Description: Implement production build size limits and monitoring for AuthContext.
  * This context is large due to multi-wallet support; size limits and monitoring
  * are enforced in vite.config.js and CI to prevent bundle bloat.
+ *
+ * ISSUE #71: Excessive context API updates in Auth module cause full application re-renders
+ * Category: Performance & Scalability
+ * Priority: Critical
+ * Affected Area: Auth module
+ * Description: Fixed excessive re-renders caused by multiple independent state updates
+ * in completeWalletLogin(). Previously, separate setWallet(), setWalletType(), and
+ * setUser() calls triggered 3 independent render cycles, causing the entire app to
+ * re-render 3 times per wallet connection. Leveraged React 18's automatic batching
+ * within the functional setState callback to ensure all updates occur in a single
+ * render cycle. The authContextValue is already properly memoized with useMemo,
+ * preventing unnecessary context propagation.
+ *
+ * ISSUE: Race condition detected in the AuthContext when submitting forms rapidly
+ * Category: Bug/Edge Case
+ * Priority: High
+ * Affected Area: AuthContext
+ * Description: Fixed race conditions that occurred when wallet connection functions
+ * were called rapidly in succession. The following fixes were implemented:
+ *
+ * ## Race Condition Fixes Applied:
+ *
+ * 1. **Unified Connection Guard**: Replaced the EVM-only `isConnecting` boolean flag
+ *    with a unified `connectingWalletType` state that tracks which wallet type is
+ *    currently connecting. This prevents concurrent connection attempts across ALL
+ *    wallet types (Stellar, Starknet, EVM).
+ *
+ * 2. **Connection Guards in All Wallet Functions**:
+ *    - `connectStarknetWallet()`: Added guard to prevent concurrent Starknet connections
+ *    - `connectStellarWallet()`: Added guard to prevent concurrent Stellar connections
+ *    - `connectEvmWallet()`: Updated to use unified connection guard
+ *    - All functions now return `{ success: false, error: "already_connecting" }` when
+ *      a connection is already in progress
+ *
+ * 3. **Atomic State Updates in completeWalletLogin()**:
+ *    - Implemented functional state updates using `setUser((currentUser) => {...})`
+ *    - Added idempotency check: if the same address is already authenticated, returns
+ *      early without re-executing state updates
+ *    - Ensures wallet state, user state, and localStorage are updated atomically
+ *
+ * 4. **Proper Cleanup on Connection Completion**:
+ *    - All wallet connection functions now properly reset `connectingWalletType` to
+ *      `null` on both success and failure paths
+ *    - Prevents the connection guard from getting stuck in a "connecting" state
+ *
+ * 5. **Backward Compatibility**:
+ *    - Maintained `isConnecting` as a derived boolean flag for components that depend
+ *      on it (e.g., ConnectWalletModal)
+ *    - No breaking changes to the public API
+ *
+ * ## Testing:
+ * Comprehensive race condition tests added to AuthContext.test.jsx covering:
+ * - Concurrent completeWalletLogin calls
+ * - Idempotency of completeWalletLogin for same address
+ * - Concurrent login calls
+ * - Rapid logout/login cycles
+ * - State consistency verification
  *
  * Manages user identity, wallet connection, and session persistence for
  * Tradazone. Exposes a `connectWallet` function that is the primary entry
@@ -37,12 +105,16 @@
 
 /* eslint-disable react-refresh/only-export-components -- provider, hooks, and session helpers are intentionally co-exported */
 
-import { createContext, useContext, useState, useEffect, useMemo } from "react";
+import { createContext, useContext, useState, useEffect, useMemo, useCallback } from "react";
 import { STORAGE_PREFIX, SESSION_TTL_MS, ALLOW_MOCK_WALLET } from '../config/env';
 import { useDiscoveredProviders } from '../utils/wallet-discovery';
+import { normalizeRichTextHtml } from '../utils/richText';
 
 const AuthContext = createContext(null);
 const AuthUserContext = createContext(null);
+const AuthActionsContext = createContext(null);
+const AuthWalletStateContext = createContext(null);
+const AuthWalletCatalogContext = createContext(null);
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -65,12 +137,16 @@ const WALLET_KEY  = `${STORAGE_PREFIX}_last_wallet`;
  * Shape of the authenticated user record stored in state and localStorage.
  *
  * @property {string | null} id              - Wallet address used as the user ID.
- * @property {string}        name            - Abbreviated wallet address, e.g. `"GABC12...XY56"`.
- * @property {string}        email           - Always `""` for wallet-auth users.
+ * @property {string}        name            - Merchant display name or abbreviated wallet address.
+ * @property {string}        email           - Contact email persisted in the session.
  * @property {string | null} avatar          - Profile image URL or `null`.
  * @property {boolean}       isAuthenticated - `true` once a wallet is connected.
  * @property {string | null} walletAddress   - Full connected wallet address.
  * @property {WalletType | null} walletType  - Which network the wallet is on.
+ * @property {string}        phone           - Business phone number.
+ * @property {string}        company         - Merchant or company name.
+ * @property {string}        address         - Business address.
+ * @property {string}        profileDescription - Sanitized rich text business description.
  */
 
 /**
@@ -132,6 +208,10 @@ const WALLET_KEY  = `${STORAGE_PREFIX}_last_wallet`;
  *   Authenticates a user from non-wallet credentials (email/password, OAuth).
  *   Persists a session to localStorage.
  *
+ * @property {(updates: Partial<UserData>) => void} updateProfile
+ *   Persists profile fields, including the rich text business description,
+ *   without mutating wallet connection state.
+ *
  * @property {() => void} logout
  *   Clears session, resets user and wallet state to defaults.
  *
@@ -186,7 +266,7 @@ export function loadSession() {
             localStorage.removeItem(SESSION_KEY);
             return null;
         }
-        return parsed.user;
+        return normalizeUserData(parsed.user);
     } catch {
         return null;
     }
@@ -199,8 +279,9 @@ export function loadSession() {
  * @returns {void}
  */
 function saveSession(userData) {
+    const normalizedUserData = normalizeUserData(userData);
     localStorage.setItem(SESSION_KEY, JSON.stringify({
-        user: userData,
+        user: normalizedUserData,
         expiresAt: Date.now() + SESSION_TTL_MS,
     }));
 }
@@ -229,6 +310,31 @@ const EMPTY_USER = {
     isAuthenticated: false,
     walletAddress: null,
     walletType: null,
+    phone: "",
+    company: "",
+    address: "",
+    profileDescription: "",
+};
+
+function normalizeUserData(userData = {}) {
+    return {
+        ...EMPTY_USER,
+        ...userData,
+        name: userData.name || "",
+        email: userData.email || "",
+        phone: userData.phone || "",
+        company: userData.company || "",
+        address: userData.address || "",
+        profileDescription: normalizeRichTextHtml(userData.profileDescription || ""),
+    };
+}
+
+const EMPTY_WALLET = {
+    address: "",
+    balance: "0",
+    currency: "STRK",
+    isConnected: false,
+    chainId: "",
 };
 
 // ---------------------------------------------------------------------------
@@ -252,18 +358,26 @@ export function AuthProvider({ children }) {
     });
 
     /**
-     * Guards against concurrent EVM connection attempts.
-     * @type {[boolean, React.Dispatch<React.SetStateAction<boolean>>]}
+     * Guards against concurrent wallet connection attempts across all wallet types.
+     * Tracks which wallet type is currently connecting to prevent race conditions.
+     * @type {[WalletType | null, React.Dispatch<React.SetStateAction<WalletType | null>>]}
      */
-    const [isConnecting, setIsConnecting] = useState(false);
+    const [connectingWalletType, setConnectingWalletType] = useState(null);
+
+    /**
+     * Legacy isConnecting flag for backward compatibility.
+     * Derived from connectingWalletType state.
+     * @type {boolean}
+     */
+    const isConnecting = connectingWalletType !== null;
 
     /**
      * Runtime wallet connection state.
      * @type {[WalletState, React.Dispatch<React.SetStateAction<WalletState>>]}
      */
     const [wallet, setWallet] = useState({
+        ...EMPTY_WALLET,
         address: user.walletAddress || "",
-        balance: "0",
         currency: user.walletType === "stellar" ? "XLM" : "STRK",
         isConnected: !!user.walletAddress,
         chainId: user.walletType === "stellar" ? "stellar" : "",
@@ -356,32 +470,52 @@ export function AuthProvider({ children }) {
      *
      * Updates wallet state, user state, and persists the session.
      *
+     * RACE CONDITION FIX: Uses functional state updates to ensure atomic operations
+     * and prevent concurrent calls from overwriting each other's state.
+     *
+     * ISSUE #71 FIX: Batched state updates to prevent multiple re-renders.
+     * Previously, separate setWallet, setWalletType, and setUser calls triggered
+     * 3 independent render cycles. Now all state is updated in a single batch,
+     * reducing full-app re-renders from 3 to 1 per wallet connection.
+     *
      * @param {string} address - Connected wallet address.
      * @param {WalletType} type - Wallet network type.
      * @returns {void}
      */
     const completeWalletLogin = useCallback((address, type) => {
-        const currency = type === "stellar" ? "XLM" : "STRK";
-        const chainId  = type === "stellar" ? "stellar" : "";
+        // Guard: prevent duplicate completion for the same address
+        setUser((currentUser) => {
+            if (currentUser.walletAddress === address && currentUser.isAuthenticated) {
+                return currentUser; // Already completed, no-op
+            }
 
-        /** @type {WalletState} */
-        const walletState = { address, isConnected: true, chainId, balance: "0", currency };
-        setWallet(walletState);
-        setWalletType(type);
-        localStorage.setItem(WALLET_KEY, address);
+            const currency = type === "stellar" ? "XLM" : "STRK";
+            const chainId  = type === "stellar" ? "stellar" : "";
 
-        /** @type {UserData} */
-        const userData = {
-            id: address,
-            name: `${address.slice(0, 6)}...${address.slice(-4)}`,
-            email: "",
-            avatar: null,
-            isAuthenticated: true,
-            walletAddress: address,
-            walletType: type,
-        };
-        setUser(userData);
-        saveSession(userData);
+            /** @type {WalletState} */
+            const walletState = { address, isConnected: true, chainId, balance: "0", currency };
+            
+            /** @type {UserData} */
+            const userData = normalizeUserData({
+                ...currentUser,
+                id: address,
+                name: currentUser.name || `${address.slice(0, 6)}...${address.slice(-4)}`,
+                email: currentUser.email || "",
+                avatar: currentUser.avatar || null,
+                isAuthenticated: true,
+                walletAddress: address,
+                walletType: type,
+            });
+
+            // ISSUE #71 FIX: Batch all state updates together using React 18's automatic batching
+            // This ensures only one render cycle instead of three separate ones
+            setWallet(walletState);
+            setWalletType(type);
+            localStorage.setItem(WALLET_KEY, address);
+            saveSession(userData);
+
+            return userData;
+        });
     }, []);
 
     // Last-connected wallet address for "welcome back" hint
@@ -396,9 +530,32 @@ export function AuthProvider({ children }) {
      * @returns {void}
      */
     const login = useCallback((userData) => {
-        const authed = { ...userData, isAuthenticated: true };
+        const authed = normalizeUserData({ ...userData, isAuthenticated: true });
         setUser(authed);
         saveSession(authed);
+    }, []);
+
+    /**
+     * ISSUE #115: Profile settings need a persistent, sanitized rich text
+     * description without moving editor implementation into AuthContext.
+     *
+     * @param {Partial<UserData>} updates - User profile updates to merge.
+     * @returns {void}
+     */
+    const updateProfile = useCallback((updates) => {
+        setUser((currentUser) => {
+            const nextUser = normalizeUserData({
+                ...currentUser,
+                ...updates,
+                isAuthenticated: currentUser.isAuthenticated,
+            });
+
+            if (nextUser.isAuthenticated) {
+                saveSession(nextUser);
+            }
+
+            return nextUser;
+        });
     }, []);
 
     /**
@@ -408,7 +565,7 @@ export function AuthProvider({ children }) {
     const logout = useCallback(() => {
         clearSession();
         setUser({ ...EMPTY_USER });
-        setWallet({ address: "", balance: "0", currency: "STRK", isConnected: false, chainId: "" });
+        setWallet({ ...EMPTY_WALLET });
         setWalletType(null);
     }, []);
 
@@ -438,9 +595,17 @@ export function AuthProvider({ children }) {
      * falls back to a hardcoded mock address for local development. This is
      * intentional and should be removed before production deployment.
      *
+     * RACE CONDITION FIX: Added connection guard to prevent concurrent attempts.
+     *
      * @returns {Promise<ConnectWalletResult>}
      */
     const connectStarknetWallet = useCallback(async () => {
+        // Guard: prevent concurrent Starknet connection attempts
+        if (connectingWalletType !== null) {
+            return { success: false, error: "already_connecting" };
+        }
+
+        setConnectingWalletType("starknet");
         try {
             const starknetProvider = window.starknet_argentX || window.starknet;
 
@@ -495,24 +660,29 @@ export function AuthProvider({ children }) {
                     });
                 }
 
+                setConnectingWalletType(null);
                 return { success: true };
             }
 
+            setConnectingWalletType(null);
             return { success: false, error: "Wallet not connected" };
         } catch (error) {
             console.error("Starknet native connect failed:", error);
 
             if (error.message?.includes("No Starknet wallet") || error.message?.includes("not found")) {
+                setConnectingWalletType(null);
                 return { success: false, error: "not_installed" };
             }
 
             if (error.message?.includes("User rejected") || error.message?.includes("declined")) {
+                setConnectingWalletType(null);
                 return { success: false, error: "rejected" };
             }
 
             // ── Dev / demo fallback ─────────────────────────────────────────────
             // Mock wallet fallback — only permitted outside production
             if (!ALLOW_MOCK_WALLET) {
+                setConnectingWalletType(null);
                 return { success: false, error: 'not_installed' };
             }
             const mockAddr = "0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7";
@@ -534,9 +704,10 @@ export function AuthProvider({ children }) {
             };
             setUser(userData);
             saveSession(userData);
+            setConnectingWalletType(null);
             return { success: true };
         }
-    }, [logout]);
+    }, [connectingWalletType, logout]);
 
     // ── Stellar (LOBSTR via AuthContext — alternative path) ─────────────────
 
@@ -554,9 +725,17 @@ export function AuthProvider({ children }) {
      * - `{ publicKey: "G..." }`
      * - `{ error: "LOCKED" | ... }`
      *
+     * RACE CONDITION FIX: Added connection guard to prevent concurrent attempts.
+     *
      * @returns {Promise<ConnectWalletResult>}
      */
     const connectStellarWallet = useCallback(async () => {
+        // Guard: prevent concurrent Stellar connection attempts
+        if (connectingWalletType !== null) {
+            return { success: false, error: "already_connecting" };
+        }
+
+        setConnectingWalletType("stellar");
         try {
             const lobstr = await import("@lobstrco/signer-extension-api");
 
@@ -595,9 +774,12 @@ export function AuthProvider({ children }) {
             setUser(userData);
             saveSession(userData);
 
+            setConnectingWalletType(null);
             return { success: true };
         } catch (error) {
             console.error("Stellar wallet connect failed:", error);
+
+            setConnectingWalletType(null);
 
             if (error.message?.includes("not installed") || error.message?.includes("LOBSTR")) {
                 return { success: false, error: "not_installed" };
@@ -611,7 +793,7 @@ export function AuthProvider({ children }) {
 
             return { success: false, error: "failed", message: error.message };
         }
-    }, []);
+    }, [connectingWalletType]);
 
     // ── EVM / Browser Wallets ────────────────────────────────────────────────
 
@@ -633,15 +815,17 @@ export function AuthProvider({ children }) {
      * If all accounts are removed (user disconnects in the extension), `logout()`
      * is called automatically.
      *
+     * RACE CONDITION FIX: Updated to use unified connection guard.
+     *
      * @param {import('ethers').Eip1193Provider | null} [specificProvider=null]
      *   Optional EIP-6963 provider. When `null`, falls back to `window.ethereum`.
      * @returns {Promise<ConnectWalletResult>}
      */
     const connectEvmWallet = useCallback(async (specificProvider = null) => {
         // Guard: prevent double-invocation (returned to caller as an error code)
-        if (isConnecting) return { success: false, error: "already_connecting" };
+        if (connectingWalletType !== null) return { success: false, error: "already_connecting" };
 
-        setIsConnecting(true);
+        setConnectingWalletType("evm");
         try {
             const injectedProvider = specificProvider || window.ethereum;
 
@@ -697,11 +881,11 @@ export function AuthProvider({ children }) {
                 });
             }
 
-            setIsConnecting(false);
+            setConnectingWalletType(null);
             return { success: true };
         } catch (error) {
             console.error("EVM wallet connect failed:", error);
-            setIsConnecting(false);
+            setConnectingWalletType(null);
 
             if (error.message?.includes("not installed") || error.message?.includes("EVM")) {
                 return { success: false, error: "not_installed" };
@@ -713,7 +897,7 @@ export function AuthProvider({ children }) {
             }
             return { success: false, error: "failed" };
         }
-    }, [isConnecting, logout]);
+    }, [connectingWalletType, logout]);
 
     // ── Public: connectWallet ────────────────────────────────────────────────
 
@@ -795,36 +979,56 @@ export function AuthProvider({ children }) {
         logout();
     }, [logout, walletType]);
 
-    const authContextValue = useMemo(() => ({
-        user,
+    const authActionsValue = useMemo(() => ({
         setUser,
-        wallet,
         setWallet,
-        walletType,
         login,
+        updateProfile,
         logout,
         connectWallet,
         disconnectWallet,
         disconnectAll,
         completeWalletLogin,
+    }), [
+        login,
+        updateProfile,
+        logout,
+        connectWallet,
+        disconnectWallet,
+        disconnectAll,
+        completeWalletLogin,
+    ]);
+
+    const authWalletStateValue = useMemo(() => ({
+        wallet,
+        walletType,
         lastWallet,
         isConnecting,
+    }), [
+        wallet,
+        walletType,
+        lastWallet,
+        isConnecting,
+    ]);
+
+    const authWalletCatalogValue = useMemo(() => ({
         installed,
         availableWallets,
     }), [
-        user,
-        wallet,
-        walletType,
-        login,
-        logout,
-        connectWallet,
-        disconnectWallet,
-        disconnectAll,
-        completeWalletLogin,
-        lastWallet,
-        isConnecting,
         installed,
         availableWallets,
+    ]);
+
+    const authContextValue = useMemo(() => ({
+        user,
+        ...authActionsValue,
+        ...authWalletStateValue,
+        ...authWalletCatalogValue,
+    }), [
+        user,
+        authActionsValue,
+        authWalletStateValue,
+        authWalletCatalogValue,
     ]);
 
     // ── Context value ────────────────────────────────────────────────────────
@@ -832,7 +1036,13 @@ export function AuthProvider({ children }) {
     return (
         <AuthContext.Provider value={authContextValue}>
             <AuthUserContext.Provider value={user}>
-                {children}
+                <AuthActionsContext.Provider value={authActionsValue}>
+                    <AuthWalletStateContext.Provider value={authWalletStateValue}>
+                        <AuthWalletCatalogContext.Provider value={authWalletCatalogValue}>
+                            {children}
+                        </AuthWalletCatalogContext.Provider>
+                    </AuthWalletStateContext.Provider>
+                </AuthActionsContext.Provider>
             </AuthUserContext.Provider>
         </AuthContext.Provider>
     );
@@ -872,9 +1082,53 @@ export function useAuth() {
  * @returns {UserData}
  * @throws {Error} If called outside an AuthProvider.
  */
-// eslint-disable-next-line react-refresh/only-export-components
 export function useAuthUser() {
     const context = useContext(AuthUserContext);
     if (context === null) throw new Error("useAuthUser must be used within an AuthProvider");
+    return context;
+}
+
+/**
+ * Returns auth commands without subscribing to user, wallet, or wallet catalog
+ * updates.
+ *
+ * ISSUE: #57
+ * SignUp only needs stable connect/disconnect commands. Pulling them from the
+ * monolithic auth context caused unrelated discovery updates to re-render the
+ * route tree and modal. This selector-style hook isolates command-only
+ * consumers from that churn.
+ *
+ * @returns {Pick<AuthContextValue, 'setUser' | 'setWallet' | 'login' | 'updateProfile' | 'logout' | 'connectWallet' | 'disconnectWallet' | 'disconnectAll' | 'completeWalletLogin'>}
+ * @throws {Error} If called outside an AuthProvider.
+ */
+export function useAuthActions() {
+    const context = useContext(AuthActionsContext);
+    if (context === null) throw new Error("useAuthActions must be used within an AuthProvider");
+    return context;
+}
+
+/**
+ * Returns the live wallet session snapshot without subscribing to discovery
+ * catalog updates.
+ *
+ * @returns {Pick<AuthContextValue, 'wallet' | 'walletType' | 'lastWallet' | 'isConnecting'>}
+ * @throws {Error} If called outside an AuthProvider.
+ */
+export function useAuthWalletState() {
+    const context = useContext(AuthWalletStateContext);
+    if (context === null) throw new Error("useAuthWalletState must be used within an AuthProvider");
+    return context;
+}
+
+/**
+ * Returns the installed/discovered wallet catalog without subscribing to auth
+ * identity or wallet session mutations.
+ *
+ * @returns {Pick<AuthContextValue, 'installed' | 'availableWallets'>}
+ * @throws {Error} If called outside an AuthProvider.
+ */
+export function useAuthWalletCatalog() {
+    const context = useContext(AuthWalletCatalogContext);
+    if (context === null) throw new Error("useAuthWalletCatalog must be used within an AuthProvider");
     return context;
 }
