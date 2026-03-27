@@ -3,6 +3,8 @@
  * has been containerized to ensure cross-platform stability.
  * Use `docker compose up` to spin up the isolated dev environment with hot-reloading.
  * Resolves Infrastructure Issue #172.
+ * * @dev Fix for Issue #24: Applied localized date parsing to the 'Created' column
+ * using the updated formatUtcDate utility to ensure timezone consistency.
  */
 
 import { useState } from "react";
