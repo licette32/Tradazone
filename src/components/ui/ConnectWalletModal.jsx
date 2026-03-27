@@ -467,17 +467,73 @@ function ConnectWalletModal({ isOpen, onClose, onConnect, connectWalletFn }) {
                                 <AlertCircle size={16} className="flex-shrink-0 mt-0.5 text-red-500" />
                                 <div>
                                     <p className="font-medium">
-                                        {error.message === 'LOCKED'       ? 'LOBSTR is locked'  :
-                                         error.message === 'ACCESS_DENIED' ? 'Access denied'     :
-                                         'Connection failed'}
+                                        {getSafeErrorMessage(error.message)}
                                     </p>
                                     <div className="text-xs mt-1 opacity-80">
-                                        {error.message === 'LOCKED' ? (
-                                            <span>Open the extension and enter your password.</span>
-                                        ) : error.message === 'ACCESS_DENIED' ? (
-                                            <span>Open LOBSTR and allow this site to connect.</span>
-                                        ) : (
-                                            error.message || 'The connection was cancelled or failed. Please try again.'
+                                        {getSafeErrorDescription(error.message)}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {wallet.isConnected && (
+                            <button
+                                onClick={async () => {
+                                    await disconnectAll();
+                                    onClose();
+                                }}
+                                disabled={connecting !== null}
+                                className="mt-5 w-full text-center text-sm font-semibold text-red-500 hover:text-red-700 transition-colors p-3 rounded-lg border border-transparent hover:border-red-100 hover:bg-red-50 disabled:opacity-50"
+                            >
+                                Disconnect all wallets
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </>
+    );
+}
+
+export default ConnectWalletModal;
+
+                    </div>
+                </div>
+            </div>
+        </>
+    );
+}
+
+export default ConnectWalletModal;
+={async () => {
+                                    await disconnectAll();
+                                    onClose();
+                                }}
+                                disabled={connecting !== null}
+                                className="mt-5 w-full text-center text-sm font-semibold text-red-500 hover:text-red-700 transition-colors p-3 rounded-lg border border-transparent hover:border-red-100 hover:bg-red-50 disabled:opacity-50"
+                            >
+                                Disconnect all wallets
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </>
+    );
+}
+
+export default ConnectWalletModal;
+
+                    </div>
+                </div>
+            </div>
+        </>
+    );
+}
+
+export default ConnectWalletModal;
+message is suppressed to prevent data leakage. */
+                                            'The connection was cancelled or failed. Please try again.'
                                         )}
                                     </div>
                                 </div>
@@ -496,6 +552,15 @@ function ConnectWalletModal({ isOpen, onClose, onConnect, connectWalletFn }) {
                                 Disconnect all wallets
                             </button>
                         )}
+                    </div>
+                </div>
+            </div>
+        </>
+    );
+}
+
+export default ConnectWalletModal;
+
                     </div>
                 </div>
             </div>
