@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { User } from 'lucide-react';
 import Input from '../../components/forms/Input';
 import Button from '../../components/forms/Button';
+import EmptyState from '../../components/ui/EmptyState';
 import { useAuthUser } from '../../context/AuthContext';
 
 // BUG FIX: Form submission succeeded without validating required fields (name, email).
@@ -11,6 +13,9 @@ function ProfileSettings() {
     // Subscribing to the entire auth context caused unrelated wallet/runtime
     // updates to redraw the whole settings form while the user was editing it.
     const user = useAuthUser();
+    // #34: wallet-auth users always have a generated name but never an email;
+    // email is the only field that signals a real profile has been set up.
+    const hasProfile = !!(user.email);
     const [formData, setFormData] = useState({
         name: user.name || '', email: user.email || '', phone: '', company: '', address: ''
     });
@@ -46,6 +51,13 @@ function ProfileSettings() {
     return (
         <div>
             <h2 className="text-lg font-semibold mb-6">Profile Settings</h2>
+            {!hasProfile && (
+                <EmptyState
+                    icon={User}
+                    title="No profile information yet"
+                    description="Fill in your details below to complete your profile."
+                />
+            )}
             <form onSubmit={handleSubmit} className="flex flex-col gap-5">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                     <Input label="Full Name" placeholder="Enter your name" value={formData.name} onChange={handleChange('name')} required error={errors.name} />
