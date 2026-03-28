@@ -12,7 +12,6 @@
     - [Deploying](#deploying)
     - [Modifying the README](#modifying-the-readme)
   - [🛠️ Developer Guide: Auth & SignUp](#-developer-guide-auth--signup)
-  - [🛠️ Developer Guide: Auth & SignUp](#-developer-guide-auth--signup-1)
     - [Authentication Flow Overview](#authentication-flow-overview)
     - [Modifying the SignUp Page](#modifying-the-signup-page)
     - [Adding New Wallet Providers](#adding-new-wallet-providers)
@@ -25,6 +24,7 @@
     - [ADR-003: InvoiceDetail Component — Stack & Design Decisions](#adr-003-invoicedetail-component--stack--design-decisions)
     - [ADR-002: API Gateway Stack Selection (Implementation Reference)](#adr-002-api-gateway-stack-selection-implementation-reference)
   - [🔧 Developer Setup Notes](#-developer-setup-notes)
+    - [Pagination Boundary Contract (`paginate`)](#pagination-boundary-contract-paginate)
     - [Modifying `ProfileSettings`](#modifying-profilesettings)
   - [🔐 Dependency Security](#-dependency-security)
   - [🔄 Dependency Management](#-dependency-management)
@@ -129,8 +129,6 @@ This project uses [doctoc](https://github.com/thlorenz/doctoc) to generate a tab
    ```
 
 ---
-
-## 🛠️ Developer Guide: Auth & SignUp
 
 ## 🛠️ Developer Guide: Auth & SignUp
 
@@ -296,6 +294,37 @@ We have adopted the following core architectural components:
 ---
 
 ## 🔧 Developer Setup Notes
+
+### Pagination Boundary Contract (`paginate`)
+
+**Issue (Bug/Edge Case):** Pagination could underflow when UI state transitions from page `1` to page `0`.
+
+- **Affected logic:** `paginate()` in `src/services/api.js`
+- **Risk:** Invalid page state can cause wrong slices or inconsistent pagination UI
+- **Fix:** Clamp requested pages below `1` back to `1` before computing offsets
+
+Implementation reference:
+
+```javascript
+export function paginate(items, page = 1, limit = 10) {
+  const safePage = Math.max(1, Math.floor(page));
+  const safeLimit = Math.max(1, Math.floor(limit));
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+  const clampedPage = Math.min(safePage, totalPages);
+  const start = (clampedPage - 1) * safeLimit;
+
+  return {
+    data: items.slice(start, start + safeLimit),
+    page: clampedPage,
+    limit: safeLimit,
+    total,
+    totalPages,
+  };
+}
+```
+
+Regression coverage lives in `src/test/api.test.js` (see the `paginate` suite).
 
 ### Modifying `ProfileSettings`
 

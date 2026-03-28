@@ -1,20 +1,28 @@
-// API Service for Tradazone
-// Handles data fetching and backend integration
-//
-// ADR-001 (API gateway / Fetch stack): documented in docs/adr/001-api-gateway-stack.md
-// Issue: #201 — selecting the centralized gateway module and HTTP handling for the UI.
+/**
+ * src/services/api.js
+ *
+ * ISSUE: #99 (Vulnerable outdated package referenced in API gateway)
+ * Category: Security & Compliance
+ * Affected Area: API gateway
+ * Description: Outdated project dependencies were referenced in the gateway stack.
+ * This has been remediated by updating package.json and implementing explicit
+ * catch logic and secure headers in the centralized apiFetch wrapper.
+ *
+ * ADR-001 (API gateway / Fetch stack): documented in docs/adr/001-api-gateway-stack.md
+ * Issue Reference: #201, #99, #122 (Bulk-delete functionality for items in API gateway)
+ */
 
 import {
-  mockCustomers,
-  mockInvoices,
-  mockCheckouts,
-  mockItems,
+    mockCustomers,
+    mockInvoices,
+    mockCheckouts,
+    mockItems,
 } from "../data/mockData";
 
 // Base URL for the backend API
 // In development, this can be an environment variable or proxy
 const API_BASE_URL =
-  import.meta.env.VITE_API_URL || "http://localhost:3000/api";
+    import.meta.env.VITE_API_URL || "http://localhost:3000/api";
 
 // Helper to simulate API delay
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -28,21 +36,21 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @returns {{ data: Array, page: number, limit: number, total: number, totalPages: number }}
  */
 export function paginate(items, page = 1, limit = 10) {
-  // BUG FIX #31: clamp page to minimum of 1 to prevent page-0 underflow
-  const safePage = Math.max(1, Math.floor(page));
-  const safeLimit = Math.max(1, Math.floor(limit));
-  const total = items.length;
-  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
-  //if the requested page exceeds the available pages,clamp to last page
-  const clampedPage = Math.min(safePage, totalPages);
-  const start = (clampedPage - 1) * safeLimit;
-  return {
-    data: items.slice(start, start + safeLimit),
-    page: clampedPage,
-    limit: safeLimit,
-    total,
-    totalPages,
-  };
+    // BUG FIX #31: clamp page to minimum of 1 to prevent page-0 underflow
+    const safePage = Math.max(1, Math.floor(page));
+    const safeLimit = Math.max(1, Math.floor(limit));
+    const total = items.length;
+    const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+    //if the requested page exceeds the available pages,clamp to last page
+    const clampedPage = Math.min(safePage, totalPages);
+    const start = (clampedPage - 1) * safeLimit;
+    return {
+        data: items.slice(start, start + safeLimit),
+        page: clampedPage,
+        limit: safeLimit,
+        total,
+        totalPages,
+    };
 }
 // ---------------------------------------------------------------------------
 // 401 / token-expiration interceptor
@@ -65,8 +73,8 @@ export function paginate(items, page = 1, limit = 10) {
  * ```
  */
 let _onUnauthorized = () => {
-  const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
-  window.location.assign(`${base}/signin?reason=expired`);
+    const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+    window.location.assign(`${base}/signin?reason=expired`);
 };
 
 /**
@@ -77,7 +85,7 @@ let _onUnauthorized = () => {
  * @param {() => void} handler
  */
 export function setUnauthorizedHandler(handler) {
-  _onUnauthorized = handler;
+    _onUnauthorized = handler;
 }
 
 /**
@@ -99,30 +107,47 @@ export function setUnauthorizedHandler(handler) {
  * @returns {Promise<unknown>}
  */
 async function apiFetch(url, options = {}) {
-    const response = await fetch(url, options);
+    const defaultOptions = {
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Content-Type-Options': 'nosniff',
+            ...options.headers
+        },
+        ...options
+    };
+    const response = await fetch(url, defaultOptions);
 
     if (response.status === 401) {
         _onUnauthorized();
         return { ok: false, error: 'ERR_TOKEN_EXPIRED', status: 401 };
     }
 
-/**
- * FIXME (Resolved #15): Previously, an empty catch block on response.json()
- * obscured underlying network errors. Added explicit error logging for
- * failed parses to ensure CI pipeline visibility.
- */
+    /**
+     * BUG FIX #16: Empty catch block in API gateway obscured underlying network errors.
+     *
+     * - On 2xx: explicitly return parsed JSON (previously fell through with undefined).
+     * - On non-2xx: the .catch() on response.json() now logs the parse failure and
+     *   includes the HTTP status in the fallback body so callers and CI pipelines
+     *   can diagnose the root cause instead of receiving an opaque error.
+     * - Network-level failures (e.g. DNS, CORS, timeout) are caught by the outer
+     *   try/catch in callers or by the fetch rejection itself; this wrapper focuses
+     *   on HTTP-layer error propagation.
+     */
     if (!response.ok) {
-            // ✅ FIX: Capture parsing error and provide context for CI/CD logs
-            const body = await response.json().catch((parseError) => {
-                console.error(`[CI Network Error] Failed to parse error response as JSON: ${parseError.message}`);
-                return { message: `Underlying network/format error (Status: ${response.status})` };
-            });
-
-            throw Object.assign(
-                new Error(body.message || `API error ${response.status}`),
-                { status: response.status, body }
+        const body = await response.json().catch((parseError) => {
+            console.error(
+                `[API Gateway] Failed to parse error response as JSON (status ${response.status}): ${parseError.message}`
             );
+            return { message: `API error ${response.status}` };
+        });
+
+        throw Object.assign(
+            new Error(body.message || `API error ${response.status}`),
+            { status: response.status, body }
+        );
     }
+    return await response.json();
+}
 
 // Expose for tests and future real-fetch migrations (not needed by mock callers)
 export { apiFetch };
@@ -149,15 +174,10 @@ const api = {
         },
         delete: async (id) => {
             await delay(500);
+            console.log("API Delete Customer:", id);
             return true;
-        }
+        },
     },
-    delete: async (id) => {
-      await delay(500);
-      console.log("API Delete Customer:", id);
-      return true;
-    },
-  },
 
     // Invoices
     invoices: {
@@ -172,9 +192,8 @@ const api = {
         create: async (data) => {
             await delay(800);
             return { id: `INV-${Date.now()}`, ...data };
-        }
+        },
     },
-  },
 
     // Checkouts
     checkouts: {
@@ -185,14 +204,8 @@ const api = {
         create: async (data) => {
             await delay(800);
             return { id: `CHK-${Date.now()}`, ...data };
-        }
+        },
     },
-    create: async (data) => {
-      await delay(800);
-      console.log("API Create Checkout:", data);
-      return { id: `CHK-${Date.now()}`, ...data };
-    },
-  },
 
     // Items
     items: {
@@ -209,10 +222,12 @@ const api = {
             return true;
         },
         bulkDelete: async (ids) => {
-            await delay(800);
-            return true;
-        }
-    }
+            return apiFetch(`${API_BASE_URL}/items/bulk`, {
+                method: 'DELETE',
+                body: JSON.stringify({ ids })
+            });
+        },
+    },
 };
 
 export default api;

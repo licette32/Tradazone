@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { DataProvider, useData } from '../context/DataContext';
+import api from '../services/api';
 
 // localStorage is available in jsdom; clear it before each test
 beforeEach(() => localStorage.clear());
@@ -99,11 +100,32 @@ describe('deleteItems', () => {
     expect(result.current.items).toHaveLength(3);
 
     act(() => {
+      // Mock the API for this test to avoid network logs
+      vi.spyOn(api.items, 'bulkDelete').mockResolvedValue(true);
       result.current.deleteItems([i1.id, i3.id]);
     });
 
     expect(result.current.items).toHaveLength(1);
     expect(result.current.items[0].id).toBe(i2.id);
+  });
+
+  it('calls api.items.bulkDelete through the gateway', async () => {
+    // Spy on the API gateway method
+    const bulkDeleteSpy = vi.spyOn(api.items, 'bulkDelete').mockResolvedValue(true);
+
+    const { result } = renderHook(() => useData(), { wrapper });
+    let i1, i2;
+    act(() => {
+        i1 = result.current.addItem({ name: 'Item 1', price: '10' });
+        i2 = result.current.addItem({ name: 'Item 2', price: '20' });
+    });
+
+    act(() => {
+        result.current.deleteItems([i1.id, i2.id]);
+    });
+
+    expect(bulkDeleteSpy).toHaveBeenCalledWith([i1.id, i2.id]);
+    bulkDeleteSpy.mockRestore();
   });
 });
 

@@ -32,11 +32,14 @@ describe('CreateCheckout E2E UI Flow', () => {
     const amountInput = screen.getByLabelText(/Amount/i);
 
     fireEvent.change(titleInput, { target: { value: 'Test Checkout Plan' } });
-    fireEvent.change(descriptionInput, { target: { value: 'A test description' } });
+    fireEvent.change(descriptionInput, { target: { value: 'A test description\nwith multiple lines' } });
     fireEvent.change(amountInput, { target: { value: '150' } });
 
     // Verify preview reflects changes
     expect(screen.getByText('Test Checkout Plan')).toBeInTheDocument();
+    expect(screen.getByText((content, element) => {
+      return element?.tagName === 'P' && /A test description\s+with multiple lines/.test(content);
+    })).toBeInTheDocument();
     expect(screen.getByText('150')).toBeInTheDocument();
 
     // Submit form

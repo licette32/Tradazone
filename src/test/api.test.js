@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { apiFetch, setUnauthorizedHandler } from '../services/api';
+import { apiFetch, setUnauthorizedHandler, paginate } from '../services/api';
 
 // ─── apiFetch ────────────────────────────────────────────────────────────────
 
@@ -19,6 +19,21 @@ describe("apiFetch", () => {
     expect(data).toEqual({ id: 1, name: "Alice" });
   });
 
+  it("includes secure headers (X-Content-Type-Options: nosniff)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await apiFetch("/api/any");
+    
+    const options = fetchMock.mock.calls[0][1];
+    expect(options.headers["X-Content-Type-Options"]).toBe("nosniff");
+  });
+
+
   it("throws an enriched error on non-401 failure", async () => {
     vi.stubGlobal(
       "fetch",
@@ -32,6 +47,25 @@ describe("apiFetch", () => {
       message: "Internal Server Error",
       status: 500,
     });
+  });
+
+  // BUG FIX #16: Verify non-JSON error responses are handled gracefully
+  it("falls back with status code when error response body is not valid JSON", async () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: async () => { throw new Error("Unexpected token < in JSON"); },
+      })
+    );
+    await expect(apiFetch("/api/customers")).rejects.toMatchObject({
+      message: "API error 502",
+      status: 502,
+    });
+    expect(consoleSpy).toHaveBeenCalledOnce();
+    consoleSpy.mockRestore();
   });
 
   it("calls the unauthorized handler on 401", async () => {
@@ -55,6 +89,14 @@ describe("apiFetch", () => {
       error: "ERR_TOKEN_EXPIRED",
       status: 401,
     });
+  });
+
+  it("propagates network-level errors (DNS, CORS, timeout) to the caller", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("Network request failed"))
+    );
+    await expect(apiFetch("/api/customers")).rejects.toThrow("Network request failed");
   });
 
   it("returns ERR_TOKEN_EXPIRED code on 401 for machine-readable UI handling", async () => {
@@ -111,6 +153,16 @@ describe("paginate", () => {
     const result = paginate(items, 0, 10);
     expect(result.page).toBe(1);
     expect(result.data[0].id).toBe(1);
+  });
+
+  it("handles transition from page 1 to page 0 without underflow", () => {
+    const pageOne = paginate(items, 1, 10);
+    expect(pageOne.page).toBe(1);
+    expect(pageOne.data[0].id).toBe(1);
+
+    const nextState = paginate(items, pageOne.page - 1, 10);
+    expect(nextState.page).toBe(1);
+    expect(nextState.data[0].id).toBe(1);
   });
 
   it("clamps negative page numbers to page 1", () => {

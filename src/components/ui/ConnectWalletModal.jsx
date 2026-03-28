@@ -1,16 +1,6 @@
 /**
  * @fileoverview ConnectWalletModal — multi-network wallet connection modal.
  *
- * Onboarding for contributors: see CONTRIBUTING.md → "ConnectWalletModal onboarding"
- * (GitHub Issue #203).
- *
- * ISSUE: #150 (Build size limits for ConnectWalletModal)
- * Category: DevOps & Infrastructure
- * Affected Area: ConnectWalletModal
- * Description: Implement production build size limits and monitoring for ConnectWalletModal.
- * This component is large due to multi-wallet support; size limits and monitoring
- * are enforced in vite.config.js and CI to prevent bundle bloat.
- *
  * Supports the following wallet providers:
  *  - LOBSTR  (Stellar / XLM)
  *  - Argent  (Starknet / STRK)
@@ -20,9 +10,6 @@
  *  - Generic Starknet wallets (Braavos, etc.)
  *  - Generic EVM / browser-injected wallets
  *
- * Wallet discovery relies on EIP-6963 (`useDiscoveredProviders`) for EVM
- * providers, and on direct `window` object sniffing for Stellar/Starknet.
- *
  * @module ConnectWalletModal
  */
 
@@ -30,40 +17,34 @@ import { useState, useEffect } from 'react';
 import { X, ExternalLink, AlertCircle, ChevronLeft } from 'lucide-react';
 import Logo from './Logo';
 import { useLobstr } from '../../hooks/useLobstr';
-import { useAuth } from '../../context/AuthContext';
+import {
+    useAuthActions,
+    useAuthWalletCatalog,
+    useAuthWalletState,
+} from '../../context/AuthContext';
 import { useVirtualList } from '../../hooks/useVirtualList';
+import { useFocusTrap } from '../../hooks/useFocusTrap';
+import StagingBanner from './StagingBanner';
 
-// ISSUE #70: Virtualization constants for the wallet list.
-// Wallets enter via EIP-6963 discovery and can be numerous; rendering every
-// item unconditionally causes layout thrash in large browser environments.
-const VIRTUALIZATION_THRESHOLD = 8;   // enable windowing above this count
-const WALLET_ROW_HEIGHT = 88;         // approx button height (76 px) + gap-3 (12 px)
-const WALLET_LIST_MAX_HEIGHT = 340;   // px — ~4 rows visible; remainder scrolls
+// VIRTUALIZATION CONSTANTS
+const VIRTUALIZATION_THRESHOLD = 8;
+const WALLET_ROW_HEIGHT = 88;
+const WALLET_LIST_MAX_HEIGHT = 340;
 
-// ---------------------------------------------------------------------------
-// Type definitions (JSDoc interfaces)
-// ---------------------------------------------------------------------------
+// HELPERS FOR SENSITIVE DATA HIDING (Issue #204)
+function getSafeErrorMessage(msg) {
+    if (!msg) return 'Connection failed.';
+    const upperMsg = msg.toUpperCase ? msg.toUpperCase() : String(msg).toUpperCase();
+    if (upperMsg.includes('LOCKED')) return 'Wallet is locked.';
+    if (upperMsg.includes('REJECTED') || upperMsg.includes('CANCEL')) return 'Connection cancelled.';
+    return 'The connection was cancelled or failed. Please try again.';
+}
 
-/**
- * @typedef {'stellar' | 'starknet' | 'evm' | 'starknet_generic'} WalletType
- */
+function getSafeErrorDescription(msg) {
+    return 'Your transaction signature was declined or the provider timed out. No sensitive details were leaked.';
+}
 
-/**
- * @typedef {'not_installed' | 'failed' | 'already_connecting'} WalletErrorCode
- */
-
-/**
- * @typedef {Object} ConnectWalletResult
- */
-
-/**
- * @typedef {Object} WalletErrorState
- */
-
-// ---------------------------------------------------------------------------
-// Internal icon components
-// ---------------------------------------------------------------------------
-
+// ICON COMPONENTS
 function StellarIcon({ size = 20 }) {
     return (
         <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
@@ -120,62 +101,30 @@ function BaseIcon({ size = 20 }) {
     );
 }
 
-// ---------------------------------------------------------------------------
-// ConnectWalletModal component
-// ---------------------------------------------------------------------------
-
 function ConnectWalletModal({ isOpen, onClose, onConnect, connectWalletFn }) {
-    /**
-     * Tracks which wallet type is currently mid-connection.
-     */
     const [connecting, setConnecting] = useState(null);
-
-    /**
-     * Stores the most recent connection error.
-     */
     const [error, setError] = useState(null);
-
-    /**
-     * Controls which network filter is active.
-     */
     const [filterNetwork, setFilterNetwork] = useState('all');
-
-    /**
-     * Search query for filtering wallets by name.
-     */
     const [searchQuery, setSearchQuery] = useState('');
-
-    /**
-     * Controls primary vs secondary view.
-     */
     const [view, setView] = useState('primary');
 
-    const {
-        completeWalletLogin,
-        wallet,
-        disconnectAll,
-        installed,
-        availableWallets
-    } = useAuth();
-
+    const { completeWalletLogin, disconnectAll } = useAuthActions();
+    const { wallet } = useAuthWalletState();
+    const { installed, availableWallets } = useAuthWalletCatalog();
     const lobstrHook = useLobstr();
 
-    // Reset transient state each time the modal is opened
+    const modalRef = useFocusTrap({ isOpen, onClose, initialFocus: true, restoreFocus: true });
+
     useEffect(() => {
         if (isOpen) {
-            // Intentional: modal open is the boundary for clearing wizard state.
-            /* eslint-disable react-hooks/set-state-in-effect -- reset UI when reopening */
             setConnecting(null);
             setError(null);
             setView('primary');
             setSearchQuery('');
             setFilterNetwork('all');
-            /* eslint-enable react-hooks/set-state-in-effect */
         }
     }, [isOpen]);
 
-    // ISSUE #70: Filter + sort must run before hooks so useVirtualList always
-    // receives the current list (React rules prohibit conditional hook calls).
     const filteredAndSortedWallets = availableWallets
         .filter(w => {
             if (searchQuery && !w.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
@@ -193,23 +142,15 @@ function ConnectWalletModal({ isOpen, onClose, onConnect, connectWalletFn }) {
         });
 
     const shouldVirtualize = filteredAndSortedWallets.length > VIRTUALIZATION_THRESHOLD;
-
-    // Always call the hook — its result is only applied to the DOM when
-    // shouldVirtualize is true (React hooks must not be called conditionally).
     const { scrollRef, virtualItems, topPadding, bottomPadding } = useVirtualList({
         items: filteredAndSortedWallets,
         itemHeight: WALLET_ROW_HEIGHT,
     });
 
-    const walletsToRender = shouldVirtualize
-        ? virtualItems.map(v => v.item)
-        : filteredAndSortedWallets;
+    const walletsToRender = shouldVirtualize ? virtualItems.map(v => v.item) : filteredAndSortedWallets;
 
     if (!isOpen) return null;
 
-    /**
-     * Maps wallet ID to the correct icon component.
-     */
     const getWalletIcon = (w) => {
         if (w.iconUri) return <img src={w.iconUri} alt={w.name} className="w-6 h-6" />;
         switch (w.id) {
@@ -222,24 +163,15 @@ function ConnectWalletModal({ isOpen, onClose, onConnect, connectWalletFn }) {
         }
     };
 
-    /**
-     * Initiates a wallet connection.
-     */
     const handleConnect = async (w) => {
         if (connecting) return;
-        
-        // Special case for LOBSTR as it uses a separate hook
         if (w.id === 'stellar') {
             const result = await lobstrHook.connect();
             if (result?.success) {
                 completeWalletLogin(result.address, 'stellar');
                 if (onConnect) onConnect('stellar');
             } else if (result?.error) {
-                setError({
-                    type: 'stellar',
-                    code: result.error === 'NOT_INSTALLED' ? 'not_installed' : 'failed',
-                    message: result.error,
-                });
+                setError({ type: 'stellar', code: result.error === 'NOT_INSTALLED' ? 'not_installed' : 'failed', message: result.error });
             }
             return;
         }
@@ -256,219 +188,91 @@ function ConnectWalletModal({ isOpen, onClose, onConnect, connectWalletFn }) {
             } else if (result.error === 'not_installed') {
                 setError({ type: w.network, code: 'not_installed' });
                 setConnecting(null);
-            } else if (result.error === 'already_connecting') {
-                // leave spinner visible
             } else {
-                setError({ type: w.network, code: 'failed' });
+                setError({ type: w.network, code: 'failed', message: result.error });
                 setConnecting(null);
             }
-        } catch {
-            setError({ type: w.network, code: 'failed' });
+        } catch (e) {
+            setError({ type: w.network, code: 'failed', message: e.message });
             setConnecting(null);
         }
     };
 
     return (
         <>
-            <div
-                className="fixed inset-0 bg-black/40 z-40 backdrop-blur-sm transition-opacity"
-                onClick={() => !connecting && onClose()}
-            />
-
-            <div className="
-                fixed z-40
-                bottom-0 left-0 right-0
-                lg:bottom-auto lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2 lg:w-full lg:max-w-md
-                bg-white shadow-2xl rounded-t-2xl lg:rounded-2xl flex flex-col max-h-[90vh] overflow-hidden
-                animate-slide-up lg:animate-none lg:zoom-in
-            ">
+            <div className="fixed inset-0 bg-black/40 z-40 backdrop-blur-sm transition-opacity" onClick={() => !connecting && onClose()} aria-hidden="true" />
+            <div ref={modalRef} role="dialog" aria-modal="true" aria-labelledby="modal-title" className="fixed z-40 bottom-0 left-0 right-0 lg:bottom-auto lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2 lg:w-full lg:max-w-md bg-white shadow-2xl rounded-t-2xl lg:rounded-2xl flex flex-col max-h-[90vh] overflow-hidden animate-slide-up lg:animate-none lg:zoom-in">
                 <div className="lg:hidden w-10 h-1 bg-border rounded-full mx-auto my-3" />
-
+                <StagingBanner />
                 <div className="flex-1 overflow-y-auto w-full">
                     <div className="px-6 pt-2 pb-4 flex justify-between items-center relative border-b border-border/50">
-                        {view === 'primary' ? (
-                            <div className="flex items-center gap-3">
-                                <Logo variant="light" className="h-6" />
-                            </div>
-                        ) : (
-                            <button
-                                onClick={() => setView('primary')}
-                                className="flex items-center gap-1.5 text-sm font-semibold text-t-primary hover:text-brand transition-colors"
-                            >
-                                <ChevronLeft size={18} />
-                                Back
+                        {view === 'primary' ? <Logo variant="light" className="h-6" /> : (
+                            <button onClick={() => setView('primary')} className="flex items-center gap-1.5 text-sm font-semibold text-t-primary hover:text-brand transition-colors">
+                                <ChevronLeft size={18} /> Back
                             </button>
                         )}
-                        <button
-                            onClick={onClose}
-                            disabled={connecting !== null}
-                            className="text-t-muted hover:text-t-primary transition-colors disabled:opacity-50"
-                            aria-label="Close modal"
-                        >
-                            <X size={20} />
-                        </button>
+                        <button onClick={onClose} disabled={connecting !== null} className="text-t-muted hover:text-t-primary transition-colors disabled:opacity-50" aria-label="Close modal"><X size={20} /></button>
                     </div>
-
                     <div className="p-6">
-                        <h2 className="text-xl font-bold text-t-primary mb-2">Connect your wallet</h2>
-                        <p className="text-sm text-t-muted mb-6">
-                            Choose how you'd like to connect to Tradazone.
-                        </p>
-
+                        <h2 id="modal-title" className="text-xl font-bold text-t-primary mb-2">Connect your wallet</h2>
+                        <p className="text-sm text-t-muted mb-6">Choose how you'd like to connect to Tradazone.</p>
                         <div className="mb-6 space-y-4">
                             <div className="relative">
-                                <input
-                                    type="text"
-                                    placeholder="Search wallets..."
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                    className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-border rounded-xl text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none transition-all"
-                                />
+                                <input type="text" placeholder="Search wallets..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-border rounded-xl text-sm focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none transition-all" />
                                 <div className="absolute left-3 top-2.5 text-t-muted">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                        <circle cx="11" cy="11" r="8" />
-                                        <path d="m21 21-4.3-4.3" />
-                                    </svg>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>
                                 </div>
                             </div>
-
                             <div className="flex flex-wrap gap-2">
                                 {['all', 'stellar', 'starknet', 'evm'].map((net) => (
-                                    <button
-                                        key={net}
-                                        onClick={() => setFilterNetwork(net)}
-                                        className={`px-3 py-1 rounded-full text-xs font-semibold capitalize transition-all
-                                            ${filterNetwork === net
-                                                ? 'bg-brand text-white shadow-md shadow-brand/20'
-                                                : 'bg-gray-100 text-t-muted hover:bg-gray-200'}`}
-                                    >
-                                        {net}
-                                    </button>
+                                    <button key={net} onClick={() => setFilterNetwork(net)} className={`px-3 py-1 rounded-full text-xs font-semibold capitalize transition-all ${filterNetwork === net ? 'bg-brand text-white shadow-md shadow-brand/20' : 'bg-gray-100 text-t-muted hover:bg-gray-200'}`}>{net}</button>
                                 ))}
                             </div>
                         </div>
-
-                        {/* ISSUE #70 fix: wallet list with virtual scrolling.
-                            When the list exceeds VIRTUALIZATION_THRESHOLD items the
-                            container becomes a bounded scroll viewport; only the
-                            visible rows (plus overscan) are in the DOM. Top/bottom
-                            spacers preserve the correct total scroll height. */}
-                        <div
-                            ref={shouldVirtualize ? scrollRef : undefined}
-                            data-testid="wallet-list-container"
-                            style={shouldVirtualize ? { maxHeight: WALLET_LIST_MAX_HEIGHT, overflowY: 'auto' } : undefined}
-                        >
+                        <div ref={shouldVirtualize ? scrollRef : undefined} data-testid="wallet-list-container" style={shouldVirtualize ? { maxHeight: WALLET_LIST_MAX_HEIGHT, overflowY: 'auto' } : undefined}>
                             {shouldVirtualize && <div style={{ height: topPadding }} aria-hidden="true" />}
                             <div className="flex flex-col gap-3">
                                 {walletsToRender.map((w) => (
-                                    <button
-                                        key={w.id}
-                                        onClick={() => handleConnect(w)}
-                                        disabled={connecting !== null || (w.id === 'stellar' && lobstrHook.isConnecting)}
-                                        className={`w-full text-left p-4 rounded-xl border flex items-center justify-between transition-all outline-none
-                                            ${connecting === w.id || (w.id === 'stellar' && lobstrHook.isConnecting) ? 'border-brand/40 bg-brand/5' : connecting !== null ? 'border-border/50 opacity-50' : 'border-border hover:border-brand/30 hover:bg-brand/5'}`}
-                                    >
+                                    <button key={w.id} onClick={() => handleConnect(w)} disabled={connecting !== null || (w.id === 'stellar' && lobstrHook.isConnecting)} className={`w-full text-left p-4 rounded-xl border flex items-center justify-between transition-all outline-none ${connecting === w.id || (w.id === 'stellar' && lobstrHook.isConnecting) ? 'border-brand/40 bg-brand/5' : connecting !== null ? 'border-border/50 opacity-50' : 'border-border hover:border-brand/30 hover:bg-brand/5'}`}>
                                         <div className="flex items-center gap-4">
-                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0
-                                                ${w.network === 'stellar' ? 'bg-blue-50' : w.network === 'starknet' ? 'bg-[#FF875B]/10' : 'bg-gray-100'}`}>
-                                                {getWalletIcon(w)}
-                                            </div>
+                                            <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${w.network === 'stellar' ? 'bg-blue-50' : w.network === 'starknet' ? 'bg-[#FF875B]/10' : 'bg-gray-100'}`}>{getWalletIcon(w)}</div>
                                             <div>
-                                                <div className="font-semibold text-t-primary flex items-center gap-2">
-                                                    {w.name}
-                                                    {w.isRecommended && (
-                                                        <span className="text-[10px] uppercase font-bold tracking-wide bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
-                                                            Recommended
-                                                        </span>
-                                                    )}
-                                                </div>
+                                                <div className="font-semibold text-t-primary flex items-center gap-2">{w.name} {w.isRecommended && <span className="text-[10px] uppercase font-bold tracking-wide bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Recommended</span>}</div>
                                                 <div className="text-xs text-t-muted">{w.networkName}</div>
                                             </div>
                                         </div>
-                                        {connecting === w.id || (w.id === 'stellar' && lobstrHook.isConnecting) ? (
-                                            <span className="w-4 h-4 border-2 border-brand/30 border-t-brand rounded-full animate-spin" />
-                                        ) : (w.isInstalled || w.rdns) && (
-                                            <span className="text-[10px] uppercase font-bold tracking-wide text-green-600 bg-green-50 px-2 py-1 rounded-md">Installed</span>
-                                        )}
+                                        {connecting === w.id || (w.id === 'stellar' && lobstrHook.isConnecting) ? <span className="w-4 h-4 border-2 border-brand/30 border-t-brand rounded-full animate-spin" /> : (w.isInstalled || w.rdns) && <span className="text-[10px] uppercase font-bold tracking-wide text-green-600 bg-green-50 px-2 py-1 rounded-md">Installed</span>}
                                     </button>
                                 ))}
                             </div>
                             {shouldVirtualize && <div style={{ height: bottomPadding }} aria-hidden="true" />}
                         </div>
-
-                        {filteredAndSortedWallets.length === 0 && (
-                            <div className="text-center py-8 text-t-muted text-sm italic">
-                                No wallets found matching your search.
-                            </div>
-                        )}
-
+                        {filteredAndSortedWallets.length === 0 && <div className="text-center py-8 text-t-muted text-sm italic">No wallets found matching your search.</div>}
                         {view === 'primary' && !searchQuery && filterNetwork === 'all' && (
-                            <button
-                                onClick={() => setView('secondary')}
-                                disabled={connecting !== null}
-                                className="w-full mt-2 text-center text-sm font-semibold text-t-secondary hover:text-brand transition-colors p-3 rounded-lg border border-transparent hover:border-border hover:bg-gray-50 disabled:opacity-50"
-                            >
-                                View more options
-                            </button>
+                            <button onClick={() => setView('secondary')} disabled={connecting !== null} className="w-full mt-2 text-center text-sm font-semibold text-t-secondary hover:text-brand transition-colors p-3 rounded-lg border border-transparent hover:border-border hover:bg-gray-50 disabled:opacity-50">View more options</button>
                         )}
-
                         {error?.code === 'not_installed' && (
                             <div className="mt-4 p-3 bg-red-50 border border-red-100 rounded-lg flex items-start gap-2 text-sm text-red-800 animate-fade-in">
                                 <AlertCircle size={16} className="flex-shrink-0 mt-0.5 text-red-500" />
                                 <div>
-                                    <p className="font-medium">
-                                        {error.type === 'stellar'  ? 'LOBSTR is not installed.'       :
-                                         error.type === 'starknet' ? 'Argent is not installed.'        :
-                                         error.type === 'evm'      ? 'EVM wallet not detected in browser.' :
-                                         'Wallet is not installed.'}
-                                    </p>
+                                    <p className="font-medium">{error.type === 'stellar' ? 'LOBSTR is not installed.' : error.type === 'starknet' ? 'Argent is not installed.' : error.type === 'evm' ? 'EVM wallet not detected in browser.' : 'Wallet is not installed.'}</p>
                                     {(error.type === 'stellar' || error.type === 'starknet') && (
-                                        <a
-                                            href={error.type === 'stellar' ? 'https://lobstr.co/' : 'https://www.argent.xyz/argent-x/'}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="inline-flex items-center gap-1 font-semibold underline mt-1"
-                                        >
-                                            Install extension <ExternalLink size={12} />
-                                        </a>
+                                        <a href={error.type === 'stellar' ? 'https://lobstr.co/' : 'https://www.argent.xyz/argent-x/'} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-semibold underline mt-1">Install extension <ExternalLink size={12} /></a>
                                     )}
                                 </div>
                             </div>
                         )}
-
                         {error?.code === 'failed' && (
                             <div className="mt-4 p-3 bg-red-50 border border-red-100 rounded-lg flex items-start gap-2 text-sm text-red-800 animate-fade-in">
                                 <AlertCircle size={16} className="flex-shrink-0 mt-0.5 text-red-500" />
                                 <div>
-                                    <p className="font-medium">
-                                        {error.message === 'LOCKED'       ? 'LOBSTR is locked'  :
-                                         error.message === 'ACCESS_DENIED' ? 'Access denied'     :
-                                         'Connection failed'}
-                                    </p>
-                                    <div className="text-xs mt-1 opacity-80">
-                                        {error.message === 'LOCKED' ? (
-                                            <span>Open the extension and enter your password.</span>
-                                        ) : error.message === 'ACCESS_DENIED' ? (
-                                            <span>Open LOBSTR and allow this site to connect.</span>
-                                        ) : (
-                                            error.message || 'The connection was cancelled or failed. Please try again.'
-                                        )}
-                                    </div>
+                                    <p className="font-medium">{getSafeErrorMessage(error.message)}</p>
+                                    <div className="text-xs mt-1 opacity-80">{getSafeErrorDescription(error.message)}</div>
                                 </div>
                             </div>
                         )}
-
                         {wallet.isConnected && (
-                            <button
-                                onClick={async () => {
-                                    await disconnectAll();
-                                    onClose();
-                                }}
-                                disabled={connecting !== null}
-                                className="mt-5 w-full text-center text-sm font-semibold text-red-500 hover:text-red-700 transition-colors p-3 rounded-lg border border-transparent hover:border-red-100 hover:bg-red-50 disabled:opacity-50"
-                            >
-                                Disconnect all wallets
-                            </button>
+                            <button onClick={async () => { await disconnectAll(); onClose(); }} disabled={connecting !== null} className="mt-5 w-full text-center text-sm font-semibold text-red-500 hover:text-red-700 transition-colors p-3 rounded-lg border border-transparent hover:border-red-100 hover:bg-red-50 disabled:opacity-50">Disconnect all wallets</button>
                         )}
                     </div>
                 </div>

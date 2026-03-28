@@ -4,54 +4,44 @@
  * ADR-002: docs/adr/002-app-routing-stack.md (Issue #202)
  * - BrowserRouter + nested Routes; protected shell via PrivateRoute + Layout.
  *
- * PERFORMANCE: Checkout route components are loaded via React.lazy() so the
- * JS for that flow is fetched on-demand, not bundled with the initial payload.
- * Chart.js (used within the checkout flow) is further isolated in its own
- * `chartjs` Rollup chunk — see src/components/ui/LazyChart.jsx and
- * vite.config.js for details.
+ * PERFORMANCE: Route components are loaded via React.lazy() so the JS for 
+ * each feature is fetched on-demand. Chart.js (used within the checkout flow) 
+ * is further isolated in its own `charts` Rollup chunk.
+ * See: src/components/ui/LazyChart.jsx and vite.config.js for details.
  */
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import PrivateRoute from './components/routing/PrivateRoute';
-import SignIn from './pages/auth/SignIn';
-import SignUp from './pages/auth/SignUp';
-import Home from './pages/dashboard/Home';
-import CustomerList from './pages/customers/CustomerList';
-import AddCustomer from './pages/customers/AddCustomer';
-import CustomerDetail from './pages/customers/CustomerDetail';
-import InvoiceList from './pages/invoices/InvoiceList';
-import CreateInvoice from './pages/invoices/CreateInvoice';
-import InvoiceDetail from './pages/invoices/InvoiceDetail';
-import InvoicePreview from './pages/invoices/InvoicePreview';
-import ItemsList from './pages/items/ItemsList';
-import AddItem from './pages/items/AddItem';
-import ItemDetail from './pages/items/ItemDetail';
-import Settings from './pages/settings/Settings';
-import ProfileSettings from './pages/settings/ProfileSettings';
-import PaymentSettings from './pages/settings/PaymentSettings';
-import NotificationSettings from './pages/settings/NotificationSettings';
-import PasswordSettings from './pages/settings/PasswordSettings';
-// ---------------------------------------------------------------------------
-// Checkout route components — lazy-loaded
-//
-// These four components are split into their own dynamic chunks so users who
-// never visit the Checkout flow pay zero JS parsing cost for that code.  When
-// any checkout route is first navigated to, React suspends the subtree, loads
-// the chunk, then resumes rendering — giving a fast initial load for every
-// other page of the app.
-// ---------------------------------------------------------------------------
-const CheckoutList   = lazy(() => import('./pages/checkouts/CheckoutList'));
+import LoadingSpinner from './components/ui/LoadingSpinner';
+
+const SignIn = lazy(() => import('./pages/auth/SignIn'));
+const SignUp = lazy(() => import('./pages/auth/SignUp'));
+const Home = lazy(() => import('./pages/dashboard/Home'));
+const CustomerList = lazy(() => import('./pages/customers/CustomerList'));
+const AddCustomer = lazy(() => import('./pages/customers/AddCustomer'));
+const CustomerDetail = lazy(() => import('./pages/customers/CustomerDetail'));
+const CheckoutList = lazy(() => import('./pages/checkouts/CheckoutList'));
 const CreateCheckout = lazy(() => import('./pages/checkouts/CreateCheckout'));
 const CheckoutDetail = lazy(() => import('./pages/checkouts/CheckoutDetail'));
-const MailCheckout   = lazy(() => import('./pages/checkouts/MailCheckout'));
+const MailCheckout = lazy(() => import('./pages/checkouts/MailCheckout'));
+const InvoiceList = lazy(() => import('./pages/invoices/InvoiceList'));
+const CreateInvoice = lazy(() => import('./pages/invoices/CreateInvoice'));
+const InvoiceDetail = lazy(() => import('./pages/invoices/InvoiceDetail'));
+const InvoicePreview = lazy(() => import('./pages/invoices/InvoicePreview'));
+const ItemsList = lazy(() => import('./pages/items/ItemsList'));
+const AddItem = lazy(() => import('./pages/items/AddItem'));
+const ItemDetail = lazy(() => import('./pages/items/ItemDetail'));
+const Settings = lazy(() => import('./pages/settings/Settings'));
+const ProfileSettings = lazy(() => import('./pages/settings/ProfileSettings'));
+const PaymentSettings = lazy(() => import('./pages/settings/PaymentSettings'));
+const NotificationSettings = lazy(() => import('./pages/settings/NotificationSettings'));
+const PasswordSettings = lazy(() => import('./pages/settings/PasswordSettings'));
 
 import { AuthProvider } from './context/AuthContext';
 import { DataProvider } from './context/DataContext';
 import { ThemeProvider } from './context/ThemeContext';
 
-/**
- * Webhook integration — checkout events
  *
  * The following checkout lifecycle events are dispatched via
  * `src/services/webhook.js` (dispatchWebhook) at the route level:
@@ -73,6 +63,7 @@ function App() {
     <AuthProvider>
       <DataProvider>
         <BrowserRouter basename="/Tradazone">
+          <Suspense fallback={<LoadingSpinner />}>
           <Routes>
             {/* Public routes — checkout payment page is lazy-loaded */}
             <Route
@@ -124,6 +115,7 @@ function App() {
             {/* Catch-all — redirect to signin */}
             <Route path="*" element={<Navigate to="/signin" replace />} />
           </Routes>
+          </Suspense>
         </BrowserRouter>
       </DataProvider>
     </AuthProvider>
