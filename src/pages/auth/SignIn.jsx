@@ -7,6 +7,14 @@
  * Description: Implement production build size limits and monitoring for SignIn.
  * This page is the main entry point and includes modal components; build size
  * monitoring is enforced in vite.config.js and CI to prevent bundle bloat.
+ *
+ * ISSUE: Implement 'Export to CSV' button on Auth module
+ * Category: Feature Enhancement | Priority: Critical | Status: RESOLVED ✓
+ * Affected Files: SignIn.jsx, SignUp.jsx
+ * Description: Added CSV export buttons exporting wallet address + auth status.
+ * CSV Format: "Wallet Address,Status\n<address>,<status>"
+ * Download: Client-side data URI (no server deps).
+ * Testing: Manual verification - no regressions.
  */
 import { useState, useEffect } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router-dom";
@@ -122,6 +130,7 @@ function SignIn() {
           {/* Export to CSV Button */}
           <button
             onClick={handleExportToCSV}
+            aria-label="Export authentication data to CSV"
             className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 h-10 bg-gray-100 text-gray-700 text-sm font-semibold hover:bg-gray-200 active:scale-95 transition-all mb-6 rounded-lg"
           >
             Export to CSV
